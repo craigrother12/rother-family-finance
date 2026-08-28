@@ -259,6 +259,27 @@ export default function App(){
   const [netWorthHistory, setNetWorthHistory] = React.useState<{date:string, timestamp:number, netWorth:number, liquid:number, illiquid:number}[]>(()=> {
     try { const s=localStorage.getItem('fam-nw-history'); return s?JSON.parse(s):[]; } catch { return []; }
   });
+  const [cloudStatus, setCloudStatus] = React.useState<'offline'|'syncing'|'synced'|'error'>('syncing');
+  const [lastSync, setLastSync] = React.useState<string>('');
+  const isInitialCloudLoad = React.useRef(true);
+  const exportBackup = ()=> {
+    try {
+      const data = { liquid, illiquid, bills, monthly, transactions, categories, learned, netWorthHistory, exportedAt: new Date().toISOString(), version: 3 };
+      const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
+      const url = URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=`rother-finance-backup-${new Date().toISOString().slice(0,10)}.json`; a.click(); URL.revokeObjectURL(url);
+    } catch(e){ alert('Export failed: '+e); }
+  };
+  const importBackup = (file: File)=> {
+    const reader = new FileReader(); reader.onload = (e)=> {
+      try {
+        const data = JSON.parse(e.target?.result as string);
+        if (!confirm(`Restore backup from ${data.exportedAt||'unknown'}? ${data.transactions?.length||0} transactions.`)) return;
+        if (data.liquid) setLiquid(data.liquid); if (data.illiquid) setIlliquid(data.illiquid); if (data.bills) setBills(data.bills); if (data.monthly) setMonthly(data.monthly); if (data.transactions) setTransactions(data.transactions); if (data.categories) setCategories(data.categories); if (data.learned) setLearned(data.learned); if (data.netWorthHistory) setNetWorthHistory(data.netWorthHistory);
+      } catch(err){ alert('Invalid backup: '+err); }
+    }; reader.readAsText(file);
+  };
+  const isDuplicate = React.useCallback((newTxn: Transaction, existing: Transaction[])=> existing.some(t=> t.date===newTxn.date && t.amount===newTxn.amount && t.name.trim().toLowerCase()===newTxn.name.trim().toLowerCase() && (t.account||'')===(newTxn.account||'')), []);
+
   React.useEffect(()=>{ localStorage.setItem('fam-nw-history', JSON.stringify(netWorthHistory)); }, [netWorthHistory]);
 
   React.useEffect(()=>{ localStorage.setItem('fam-liquid', JSON.stringify(liquid)); }, [liquid]);
@@ -709,4 +730,5 @@ export default function App(){
     </PasswordGate>
   );
 }
+
 
