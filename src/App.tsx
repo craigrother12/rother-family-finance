@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell, LineChart, Line, Legend } from 'recharts';
 import { Upload, Wallet, Home, Plus, Search, CalendarDays } from 'lucide-react';
@@ -479,9 +478,17 @@ export default function App(){
       <header className="sticky top-0 z-30 bg-white/80 backdrop-blur border-b">
         <div className="max-w-[1440px] mx-auto px-4 md:px-8 py-4 flex justify-between items-center">
           <div className="flex items-center gap-3"><div className="w-9 h-9 rounded-xl bg-slate-900 text-white grid place-items-center font-black">R</div><div><h1 className="text-[15px] font-bold">Rother Family Finance</h1><p className="text-[11px] text-slate-500">{nowStr()}</p></div></div>
-          <div className="flex items-center gap-2"><div className="hidden md:flex gap-2"><div className="px-3 py-1.5 rounded-full bg-slate-900 text-white text-xs">{fmt(netWorth)}</div><div className="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 text-[11px] border">{fmt(trueLiquidCash)}</div></div>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] bg-white">
+              {cloudStatus==='synced' && <><Cloud size={12} className="text-emerald-600"/><span className="text-emerald-700">Cloud Synced {lastSync}</span></>}
+              {cloudStatus==='syncing' && <><RefreshCw size={12} className="animate-spin"/><span>Syncing...</span></>}
+              {cloudStatus==='offline' && <><CloudOff size={12} className="text-slate-400"/><span className="text-slate-500">Local Only</span></>}
+              {cloudStatus==='error' && <><CloudOff size={12} className="text-red-500"/><span className="text-red-600">Sync Error</span></>}
+            </div>
+            <div className="hidden md:flex gap-2"><div className="px-3 py-1.5 rounded-full bg-slate-900 text-white text-xs">{fmt(netWorth)}</div><div className="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 text-[11px] border">{fmt(trueLiquidCash)}</div></div>
             <button onClick={exportBackup} className="px-3 py-2 rounded-xl bg-emerald-600 text-white border text-xs font-semibold">Export</button>
             <label className="px-3 py-2 rounded-xl bg-white border text-xs cursor-pointer">Import<input type="file" accept=".json" className="hidden" onChange={e=>{ const f=e.target.files?.[0]; if(f) importBackup(f); e.target.value=''; }}/></label>
+            {supabase && <><button onClick={manualSync} className="px-3 py-2 rounded-xl bg-slate-900 text-white border text-xs">Push Cloud</button><button onClick={pullFromCloud} className="px-3 py-2 rounded-xl bg-white border text-xs">Pull Cloud</button></>}
             <button onClick={()=>{ try{ sessionStorage.removeItem('fam-auth'); }catch{} location.reload(); }} className="px-3 py-2 rounded-xl bg-white border text-xs">Lock</button><button onClick={resetToBlankSlate} className="px-3 py-2 rounded-xl bg-white border text-xs">Blank</button></div>
         </div>
         <div className="max-w-[1440px] mx-auto px-4 md:px-8 flex gap-1 overflow-x-auto">
