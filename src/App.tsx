@@ -1,4 +1,11 @@
 import React, { useState } from 'react';
+import { createClient } from '@supabase/supabase-js';
+const SUPABASE_URL = "https://vvhjyjidbqixxsdncfjw.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ2aGp5amlkYnFpeHhzZG5jZmp3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc5Mzk1NTAsImV4cCI6MjEwMzUxNTU1MH0.jFmKLlUEvtWi2iiSjp6y0nWeufqqAHlXBczirvkDsSo";
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const CLOUD_TABLE = 'family_finance';
+const CLOUD_ID = 'rother_main';
+
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell, LineChart, Line, Legend } from 'recharts';
 import { Upload, Wallet, Home, Plus, Search, CalendarDays } from 'lucide-react';
 
@@ -259,6 +266,13 @@ export default function App(){
   const [netWorthHistory, setNetWorthHistory] = React.useState<{date:string, timestamp:number, netWorth:number, liquid:number, illiquid:number}[]>(()=> {
     try { const s=localStorage.getItem('fam-nw-history'); return s?JSON.parse(s):[]; } catch { return []; }
   });
+  const [cloudStatus, setCloudStatus] = React.useState<'offline'|'syncing'|'synced'|'error'>('syncing');
+  const [lastSync, setLastSync] = React.useState<string>('');
+  const isInitialCloudLoad = React.useRef(true);
+  const isDuplicate = React.useCallback((newTxn: Transaction, existing: Transaction[])=> existing.some(t=> t.date===newTxn.date && t.amount===newTxn.amount && t.name.trim().toLowerCase()===newTxn.name.trim().toLowerCase() && (t.account||'')===(newTxn.account||'')), []);
+  const manualSync = async ()=> { try{ setCloudStatus('syncing'); const payload={liquid,illiquid,bills,monthly,transactions,categories,learned,netWorthHistory}; const {error}=await supabase.from(CLOUD_TABLE).upsert({id:CLOUD_ID,data:payload,updated_at:new Date().toISOString()},{onConflict:'id'}); if(error) throw error; setCloudStatus('synced'); setLastSync(new Date().toLocaleTimeString()); alert('Synced!'); }catch(e:any){ setCloudStatus('error'); alert('Sync failed: '+e.message);} };
+  const pullFromCloud = async ()=> { if(!confirm('Overwrite local with cloud?')) return; try{ setCloudStatus('syncing'); const {data,error}=await supabase.from(CLOUD_TABLE).select('data').eq('id',CLOUD_ID).single(); if(error) throw error; const d=data.data as any; if(d.liquid) setLiquid(d.liquid); if(d.illiquid) setIlliquid(d.illiquid); if(d.bills) setBills(d.bills); if(d.monthly) setMonthly(d.monthly); if(d.transactions) setTransactions(d.transactions); if(d.categories) setCategories(d.categories); if(d.learned) setLearned(d.learned); if(d.netWorthHistory) setNetWorthHistory(d.netWorthHistory); setCloudStatus('synced'); }catch(e:any){ setCloudStatus('error'); alert('Pull failed: '+e.message);} };
+
   React.useEffect(()=>{ localStorage.setItem('fam-nw-history', JSON.stringify(netWorthHistory)); }, [netWorthHistory]);
 
   React.useEffect(()=>{ localStorage.setItem('fam-liquid', JSON.stringify(liquid)); }, [liquid]);
@@ -709,6 +723,9 @@ export default function App(){
     </PasswordGate>
   );
 }
+
+
+
 
 
 
