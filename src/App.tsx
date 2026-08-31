@@ -1,4 +1,11 @@
 import React, { useState } from 'react';
+import { createClient } from '@supabase/supabase-js';
+const SUPABASE_URL = "https://vvhjyjidbqixxsdncfjw.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ2aGp5amlkYnFpeHhzZG5jZmp3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc5Mzk1NTAsImV4cCI6MjEwMzUxNTU1MH0.jFmKLlUEvtWi2iiSjp6y0nWeufqqAHlXBczirvkDsSo";
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const CLOUD_TABLE = 'family_finance';
+const CLOUD_ID = 'rother_main';
+
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell, LineChart, Line, Legend } from 'recharts';
 import { Upload, Wallet, Home, Plus, Search, CalendarDays } from 'lucide-react';
 
@@ -245,6 +252,16 @@ export default function App(){
   const [illiquid, setIlliquid] = React.useState<Account[]>(()=> { try{ const s=localStorage.getItem('fam-illiquid'); return s?JSON.parse(s):INITIAL_ILLIQUID; } catch{ return INITIAL_ILLIQUID; } });
   const [bills, setBills] = React.useState<Bill[]>(()=> { try{ const s=localStorage.getItem('fam-bills'); return s?JSON.parse(s):INITIAL_BILLS; } catch{ return INITIAL_BILLS; } });
   const [monthly, setMonthly] = React.useState<MonthlyRecord[]>(()=> { try{ const s=localStorage.getItem('fam-monthly'); return s?JSON.parse(s):INITIAL_MONTHLY; } catch{ return INITIAL_MONTHLY; } });
+  const [netWorthHistory, setNetWorthHistory] = React.useState<{date:string, timestamp:number, netWorth:number, liquid:number, illiquid:number}[]>(()=> { try { const s=localStorage.getItem('fam-nw-history'); return s?JSON.parse(s):[]; } catch { return []; } });
+  const [cloudStatus, setCloudStatus] = React.useState<'offline'|'syncing'|'synced'|'error'>('syncing');
+  const [lastSync, setLastSync] = React.useState<string>('');
+  const isInitialCloudLoad = React.useRef(true);
+  const isDuplicate = React.useCallback((newTxn: Transaction, existing: Transaction[])=> existing.some(t=> t.date===newTxn.date && t.amount===newTxn.amount && t.name.trim().toLowerCase()===newTxn.name.trim().toLowerCase() && (t.account||'')===(newTxn.account||'')), []);
+  const exportBackup = ()=> { try { const data = { liquid, illiquid, bills, monthly, transactions, categories, learned, netWorthHistory, exportedAt: new Date().toISOString(), version: 3 }; const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'}); const url = URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=`rother-finance-backup-${new Date().toISOString().slice(0,10)}.json`; a.click(); URL.revokeObjectURL(url); } catch(e){ alert('Export failed: '+e); } };
+  const importBackup = (file: File)=> { const reader = new FileReader(); reader.onload = (e)=> { try { const data = JSON.parse(e.target?.result as string); if (!confirm(`Restore backup from ${data.exportedAt||'unknown'}? ${data.transactions?.length||0} transactions.`)) return; if (data.liquid) setLiquid(data.liquid); if (data.illiquid) setIlliquid(data.illiquid); if (data.bills) setBills(data.bills); if (data.monthly) setMonthly(data.monthly); if (data.transactions) setTransactions(data.transactions); if (data.categories) setCategories(data.categories); if (data.learned) setLearned(data.learned); if (data.netWorthHistory) setNetWorthHistory(data.netWorthHistory); } catch(err){ alert('Invalid backup: '+err); } }; reader.readAsText(file); };
+  const manualSync = async ()=> { try{ setCloudStatus('syncing'); const payload={liquid,illiquid,bills,monthly,transactions,categories,learned,netWorthHistory}; const {error}=await supabase.from(CLOUD_TABLE).upsert({id:CLOUD_ID,data:payload,updated_at:new Date().toISOString()},{onConflict:'id'}); if(error) throw error; setCloudStatus('synced'); setLastSync(new Date().toLocaleTimeString()); alert('Synced!'); }catch(e:any){ setCloudStatus('error'); alert('Sync failed: '+e.message);} };
+  const pullFromCloud = async ()=> { if(!confirm('Overwrite local with cloud?')) return; try{ setCloudStatus('syncing'); const {data,error}=await supabase.from(CLOUD_TABLE).select('data').eq('id',CLOUD_ID).single(); if(error) throw error; const d=data.data as any; if(d.liquid) setLiquid(d.liquid); if(d.illiquid) setIlliquid(d.illiquid); if(d.bills) setBills(d.bills); if(d.monthly) setMonthly(d.monthly); if(d.transactions) setTransactions(d.transactions); if(d.categories) setCategories(d.categories); if(d.learned) setLearned(d.learned); if(d.netWorthHistory) setNetWorthHistory(d.netWorthHistory); setCloudStatus('synced'); }catch(e:any){ setCloudStatus('error'); alert('Pull failed: '+e.message);} };
+
   const [transactions, setTransactions] = React.useState<Transaction[]>(()=> { try{ const s=localStorage.getItem('fam-trans'); return s?JSON.parse(s):[]; } catch{ return []; } });
   const [categories, setCategories] = React.useState<Category[]>(()=> { try{ const s=localStorage.getItem('fam-cats'); return s?JSON.parse(s):INITIAL_CATEGORIES; } catch{ return INITIAL_CATEGORIES; } });
   const [tab, setTab] = React.useState<'overview'|'accounts'|'bills'|'transactions'|'categories'>('overview');
@@ -256,9 +273,8 @@ export default function App(){
     try { return JSON.parse(localStorage.getItem('fam-learned')||'{}'); } catch { return {}; }
   });
   React.useEffect(()=>{ localStorage.setItem('fam-learned', JSON.stringify(learned)); }, [learned]);
+
   React.useEffect(()=>{ localStorage.setItem('fam-nw-history', JSON.stringify(netWorthHistory)); }, [netWorthHistory]);
-  React.useEffect(()=> { const load = async ()=> { try { setCloudStatus('syncing'); const { data, error } = await supabase.from(CLOUD_TABLE).select('data, updated_at').eq('id', CLOUD_ID).single(); if (error && error.code !== 'PGRST116') throw error; if (data?.data && Object.keys(data.data).length>0) { const d = data.data as any; if (d.transactions && d.transactions.length>0) { if (d.transactions.length > transactions.length || confirm(`Cloud has ${d.transactions.length} txns from ${new Date(data.updated_at).toLocaleString()}, local has ${transactions.length}. Load cloud?`)) { if (d.liquid) setLiquid(d.liquid); if (d.illiquid) setIlliquid(d.illiquid); if (d.bills) setBills(d.bills); if (d.monthly) setMonthly(d.monthly); if (d.transactions) setTransactions(d.transactions); if (d.categories) setCategories(d.categories); if (d.learned) setLearned(d.learned); if (d.netWorthHistory) setNetWorthHistory(d.netWorthHistory); } } setLastSync(new Date(data.updated_at).toLocaleTimeString()); } setCloudStatus('synced'); isInitialCloudLoad.current=false; } catch(e){ console.error(e); setCloudStatus('error'); isInitialCloudLoad.current=false; } }; load(); }, []);
-  React.useEffect(()=> { if (isInitialCloudLoad.current) return; setCloudStatus('syncing'); const payload = { liquid, illiquid, bills, monthly, transactions, categories, learned, netWorthHistory }; const t = setTimeout(async ()=> { try { const {error}=await supabase.from(CLOUD_TABLE).upsert({id:CLOUD_ID, data:payload, updated_at:new Date().toISOString()}, {onConflict:'id'}); if(error) throw error; setCloudStatus('synced'); setLastSync(new Date().toLocaleTimeString()); } catch(e){ console.error(e); setCloudStatus('error'); } }, 1500); return ()=> clearTimeout(t); }, [liquid, illiquid, bills, monthly, transactions, categories, learned, netWorthHistory]);
 
   React.useEffect(()=>{ localStorage.setItem('fam-liquid', JSON.stringify(liquid)); }, [liquid]);
   React.useEffect(()=>{ localStorage.setItem('fam-illiquid', JSON.stringify(illiquid)); }, [illiquid]);
@@ -697,10 +713,3 @@ export default function App(){
     </PasswordGate>
   );
 }
-
-
-
-
-
-
-
