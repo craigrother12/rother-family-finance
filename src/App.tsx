@@ -752,7 +752,8 @@ export default function App(){
                   <thead className="bg-slate-50"><tr><th className="text-left px-4 py-2.5">Date</th><th className="text-left px-3 py-2.5">Description</th><th className="text-right px-3 py-2.5">Amount</th><th className="text-left px-3 py-2.5">Category - editable</th><th className="px-4"></th></tr></thead>
                   <tbody>{filteredTransactions.map(t=> (<tr key={t.id} className="border-t"><td className="px-4 py-2.5 text-slate-600">{t.date}</td><td className="px-3 py-2.5 font-medium max-w-[260px] truncate">{t.description}</td><td className={`px-3 py-2.5 text-right font-semibold ${t.amount<0?'text-red-600':'text-emerald-700'}`}>{fmt(t.amount)}</td><td className="px-3 py-2.5"><select value={t.category} onChange={e=> {
                         const newCat = e.target.value;
-                        setTransactions(prev=> prev.map(x=> x.id===t.id?{...x, category:newCat, type:newCat==='Income'?'income': x.type}:x));
+                        const newType = newCat==='Income' ? 'income' as const : newCat==='Transfers' ? x.type : 'expense' as const;
+                        setTransactions(prev=> prev.map(x=> x.id===t.id?{...x, category:newCat, type:newType}:x));
                         const key = t.description.toUpperCase().trim();
                         const baseKey = key.replace(/#\d+/g,'').replace(/\s+\d+$/g,'').trim().replace(/\s+/g,' ');
                         const baseKey2 = baseKey.replace(/#.*$/,'').trim();
