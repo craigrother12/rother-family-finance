@@ -260,14 +260,14 @@ export default function App(){
   const lastPushTime = React.useRef(0);
   const isDuplicate = React.useCallback((newTxn: Transaction, existing: Transaction[])=> existing.some(t=> t.date===newTxn.date && t.amount===newTxn.amount && t.name.trim().toLowerCase()===newTxn.name.trim().toLowerCase() && (t.account||'')===(newTxn.account||'')), []);
   const exportBackup = ()=> { try { const data = { liquid, illiquid, bills, monthly, transactions, categories, learned, netWorthHistory, exportedAt: new Date().toISOString(), version: 3 }; const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'}); const url = URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=`rother-finance-backup-${new Date().toISOString().slice(0,10)}.json`; a.click(); URL.revokeObjectURL(url); } catch(e){ alert('Export failed: '+e); } };
-  const importBackup = (file: File)=> { const reader = new FileReader(); reader.onload = (e)=> { try { const data = JSON.parse(e.target?.result as string); if (!confirm(`Restore backup from ${data.exportedAt||'unknown'}? ${data.transactions?.length||0} transactions.`)) return; if (data.liquid) setLiquid(data.liquid); if (data.illiquid) setIlliquid(data.illiquid); if (data.bills) setBills(data.bills); if (data.monthly) setMonthly(data.monthly); if (data.transactions) setTransactions(data.transactions); if (data.categories) setCategories(data.categories); if (data.learned) setLearned(data.learned); if (data.netWorthHistory) setNetWorthHistory(data.netWorthHistory); } catch(err){ alert('Invalid backup: '+err); } }; reader.readAsText(file); };
-  const manualSync = async ()=> { try{ setCloudStatus('syncing'); const payload={liquid,illiquid,bills,monthly,transactions,categories,learned,netWorthHistory}; const {error}=await supabase.from(CLOUD_TABLE).upsert({id:CLOUD_ID,data:payload,updated_at:new Date().toISOString()},{onConflict:'id'}); if(error) throw error; setCloudStatus('synced'); setLastSync(new Date().toLocaleTimeString()); alert('Synced!'); }catch(e:any){ setCloudStatus('error'); alert('Sync failed: '+e.message);} };
-  const pullFromCloud = async ()=> { if(!confirm('Overwrite local with cloud?')) return; try{ setCloudStatus('syncing'); const {data,error}=await supabase.from(CLOUD_TABLE).select('data').eq('id',CLOUD_ID).single(); if(error) throw error; const d=data.data as any; if(d.liquid) setLiquid(d.liquid); if(d.illiquid) setIlliquid(d.illiquid); if(d.bills) setBills(d.bills); if(d.monthly) setMonthly(d.monthly); if(d.transactions) setTransactions(d.transactions); if(d.categories) setCategories(d.categories); if(d.learned) setLearned(d.learned); if(d.netWorthHistory) setNetWorthHistory(d.netWorthHistory); setCloudStatus('synced'); }catch(e:any){ setCloudStatus('error'); alert('Pull failed: '+e.message);} };
+  const importBackup = (file: File)=> { const reader = new FileReader(); reader.onload = (e)=> { try { const data = JSON.parse(e.target?.result as string); if (!confirm(`Restore backup from ${data.exportedAt||'unknown'}? ${data.transactions?.length||0} transactions.`)) return; if (data.liquid) setLiquid(data.liquid); if (data.illiquid) setIlliquid(data.illiquid); if (data.bills) setBills(data.bills); if (data.transactions) setTransactions(data.transactions); if (data.categories) setCategories(data.categories); if (data.learned) setLearned(data.learned); if (data.netWorthHistory) setNetWorthHistory(data.netWorthHistory); } catch(err){ alert('Invalid backup: '+err); } }; reader.readAsText(file); };
 
   const [transactions, setTransactions] = React.useState<Transaction[]>(()=> { try{ const s=localStorage.getItem('fam-trans'); return s?JSON.parse(s):[]; } catch{ return []; } });
   const [categories, setCategories] = React.useState<Category[]>(()=> { try{ const s=localStorage.getItem('fam-cats'); return s?JSON.parse(s):INITIAL_CATEGORIES; } catch{ return INITIAL_CATEGORIES; } });
   const [tab, setTab] = React.useState<'overview'|'accounts'|'bills'|'transactions'|'categories'>('overview');
   const [search, setSearch] = React.useState(''); const [filterCat, setFilterCat] = React.useState('All'); const [filterYear, setFilterYear] = React.useState('2026'); const [filterMonthOnly, setFilterMonthOnly] = React.useState('08'); // 'All' for whole year
+  const [showAddTx, setShowAddTx] = React.useState(false);
+  const [newTx, setNewTx] = React.useState<{date:string, description:string, amount:string, category:string, type:'income'|'expense'}>({date: new Date().toISOString().slice(0,10), description:'', amount:'', category:'Other', type:'expense'});
   const filterMonth = filterYear === 'All' ? '' : filterMonthOnly === 'All' ? filterYear : `${filterYear}-${filterMonthOnly}`;
   const [csvPreview, setCsvPreview] = React.useState<Transaction[]|null>(null);
   const [newCatName, setNewCatName] = React.useState(''); const [newCatColor, setNewCatColor] = React.useState('#10b981');
@@ -276,9 +276,71 @@ export default function App(){
   });
   React.useEffect(()=>{ localStorage.setItem('fam-learned', JSON.stringify(learned)); }, [learned]);
 
+
   React.useEffect(()=>{ localStorage.setItem('fam-nw-history', JSON.stringify(netWorthHistory)); }, [netWorthHistory]);
-  React.useEffect(()=> { const load = async ()=> { try { setCloudStatus('syncing'); const { data, error } = await supabase.from(CLOUD_TABLE).select('data, updated_at').eq('id', CLOUD_ID).single(); if (error && error.code !== 'PGRST116') throw error; if (data?.data && Object.keys(data.data).length>0) { const d = data.data as any; if (d.transactions && d.transactions.length>0) { if (d.transactions.length > transactions.length || confirm(`Cloud has ${d.transactions.length} txns from ${new Date(data.updated_at).toLocaleString()}, local has ${transactions.length}. Load cloud?`)) { if (d.liquid) setLiquid(d.liquid); if (d.illiquid) setIlliquid(d.illiquid); if (d.bills) setBills(d.bills); if (d.monthly) setMonthly(d.monthly); if (d.transactions) setTransactions(d.transactions); if (d.categories) setCategories(d.categories); if (d.learned) setLearned(d.learned); if (d.netWorthHistory) setNetWorthHistory(d.netWorthHistory); } } setLastSync(new Date(data.updated_at).toLocaleTimeString()); } setCloudStatus('synced'); isInitialCloudLoad.current=false; } catch(e){ console.error(e); setCloudStatus('error'); isInitialCloudLoad.current=false; } }; load(); const channel = supabase.channel('family-finance-live').on('postgres_changes', { event: '*', schema: 'public', table: CLOUD_TABLE, filter: `id=eq.${CLOUD_ID}` }, (payload:any)=> { try { const d = (payload.new as any)?.data; if (!d || isInitialCloudLoad.current) return; const remoteTime = new Date((payload.new as any).updated_at || 0).getTime(); if (remoteTime && remoteTime <= lastPushTime.current) return; isApplyingRemote.current = true; if (d.liquid) setLiquid(d.liquid); if (d.illiquid) setIlliquid(d.illiquid); if (d.bills) setBills(d.bills); if (d.monthly) setMonthly(d.monthly); if (d.transactions) setTransactions(d.transactions); if (d.categories) setCategories(d.categories); if (d.learned) setLearned(d.learned); if (d.netWorthHistory) setNetWorthHistory(d.netWorthHistory); setLastSync(new Date().toLocaleTimeString()); setCloudStatus('synced'); setTimeout(()=> { isApplyingRemote.current = false; }, 2000); } catch(e){ console.error('realtime error', e); } }).subscribe(); return ()=> { supabase.removeChannel(channel); }; }, []);
-  React.useEffect(()=> { if (isInitialCloudLoad.current) return; if (isApplyingRemote.current) return; setCloudStatus('syncing'); const payload = { liquid, illiquid, bills, monthly, transactions, categories, learned, netWorthHistory }; const t = setTimeout(async ()=> { try { const now = Date.now(); const {error}=await supabase.from(CLOUD_TABLE).upsert({id:CLOUD_ID, data:payload, updated_at:new Date().toISOString()}, {onConflict:'id'}); if(error) throw error; lastPushTime.current = now; setCloudStatus('synced'); setLastSync(new Date().toLocaleTimeString()); } catch(e){ console.error(e); setCloudStatus('error'); } }, 2000); return ()=> clearTimeout(t); }, [liquid, illiquid, bills, monthly, transactions, categories, learned, netWorthHistory]);
+  React.useEffect(()=> { 
+    const load = async ()=> { 
+      try { 
+        setCloudStatus('syncing'); 
+        const { data, error } = await supabase.from(CLOUD_TABLE).select('data, updated_at').eq('id', CLOUD_ID).single(); 
+        if (error && error.code !== 'PGRST116') throw error; 
+        if (data?.data && Object.keys(data.data).length>0) { 
+          const d = data.data as any; 
+          isApplyingRemote.current = true;
+          if (d.liquid) setLiquid(d.liquid); 
+          if (d.illiquid) setIlliquid(d.illiquid); 
+          if (d.bills) setBills(d.bills); 
+          if (d.transactions && d.transactions.length>0) setTransactions(d.transactions); 
+          if (d.categories) setCategories(d.categories); 
+          if (d.learned) setLearned(d.learned); 
+          if (d.netWorthHistory) setNetWorthHistory(d.netWorthHistory); 
+          setLastSync(new Date(data.updated_at).toLocaleTimeString()); 
+          setTimeout(()=> { isApplyingRemote.current = false; }, 2000);
+        } 
+        setCloudStatus('synced'); 
+        isInitialCloudLoad.current=false; 
+      } catch(e){ console.error(e); setCloudStatus('error'); isInitialCloudLoad.current=false; } 
+    }; 
+    load(); 
+    const channel = supabase.channel('family-finance-live').on('postgres_changes', { event: '*', schema: 'public', table: CLOUD_TABLE, filter: `id=eq.${CLOUD_ID}` }, (payload:any)=> { 
+      try { 
+        const d = (payload.new as any)?.data; 
+        if (!d || isInitialCloudLoad.current) return; 
+        const remoteTime = new Date((payload.new as any).updated_at || 0).getTime(); 
+        if (remoteTime && remoteTime <= lastPushTime.current) return; 
+        isApplyingRemote.current = true; 
+        if (d.liquid) setLiquid(d.liquid); 
+        if (d.illiquid) setIlliquid(d.illiquid); 
+        if (d.bills) setBills(d.bills); 
+        if (d.transactions) setTransactions(d.transactions); 
+        if (d.categories) setCategories(d.categories); 
+        if (d.learned) setLearned(d.learned); 
+        if (d.netWorthHistory) setNetWorthHistory(d.netWorthHistory); 
+        setLastSync(new Date().toLocaleTimeString()); 
+        setCloudStatus('synced'); 
+        setTimeout(()=> { isApplyingRemote.current = false; }, 2000); 
+      } catch(e){ console.error('realtime error', e); } 
+    }).subscribe(); 
+    return ()=> { supabase.removeChannel(channel); }; 
+  }, []);
+  React.useEffect(()=> { 
+    if (isInitialCloudLoad.current) return; 
+    if (isApplyingRemote.current) return; 
+    setCloudStatus('syncing'); 
+    const payload = { liquid, illiquid, bills, transactions, categories, learned, netWorthHistory }; 
+    const t = setTimeout(async ()=> { 
+      try { 
+        const now = Date.now(); 
+        const {error}=await supabase.from(CLOUD_TABLE).upsert({id:CLOUD_ID, data:payload, updated_at:new Date().toISOString()}, {onConflict:'id'}); 
+        if(error) throw error; 
+        lastPushTime.current = now; 
+        setCloudStatus('synced'); 
+        setLastSync(new Date().toLocaleTimeString()); 
+      } catch(e){ console.error(e); setCloudStatus('error'); } 
+    }, 2000); 
+    return ()=> clearTimeout(t); 
+  }, [liquid, illiquid, bills, transactions, categories, learned, netWorthHistory]);
+
 
   React.useEffect(()=>{ localStorage.setItem('fam-liquid', JSON.stringify(liquid)); }, [liquid]);
   React.useEffect(()=>{ localStorage.setItem('fam-illiquid', JSON.stringify(illiquid)); }, [illiquid]);
@@ -288,31 +350,22 @@ export default function App(){
   React.useEffect(()=>{ localStorage.setItem('fam-cats', JSON.stringify(categories)); }, [categories]);
 
   const recalcMonthly = (allTx: Transaction[]) => {
-    if (allTx.length === 0) {
-      setMonthly(INITIAL_MONTHLY);
-      return;
-    }
     const monthMap = new Map<string, { income: number; expense: number }>();
     allTx.forEach(t=>{
       if (t.category === 'Transfers') return;
       const mKey = t.date.slice(0,7);
       const cur = monthMap.get(mKey) || { income: 0, expense: 0 };
-      if (t.type==='income') cur.income += t.amount; else cur.expense += Math.abs(t.amount);
+      if (t.type==='income') cur.income += Math.abs(t.amount); else cur.expense += Math.abs(t.amount);
       monthMap.set(mKey, cur);
     });
-    setMonthly(prev=> prev.map(rec=>{
-      const monthNum = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].indexOf(rec.month);
-      if (monthNum<0) return rec;
-      const key2026 = `2026-${String(monthNum+1).padStart(2,'0')}`;
-      let agg = monthMap.get(key2026);
-      if (!agg) {
-        for (const [k,v] of monthMap.entries()) {
-          if (k.endsWith(`-${String(monthNum+1).padStart(2,'0')}`)) { agg = v; break; }
-        }
-      }
-      if (!agg) return {...rec, income: 0, expense: 0, net: 0 };
-      return { ...rec, income: Math.round(agg.income*100)/100, expense: Math.round(agg.expense*100)/100, net: Math.round((agg.income-agg.expense)*100)/100 };
-    }));
+    const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const newMonthly = monthNames.map((mName, idx)=>{
+      const mm = String(idx+1).padStart(2,'0');
+      let income=0, expense=0;
+      for (const [k,v] of monthMap.entries()) { if (k.endsWith(`-${mm}`)) { income+=v.income; expense+=v.expense; } }
+      return { month: mName, income: Math.round(income*100)/100, expense: Math.round(expense*100)/100, net: Math.round((income-expense)*100)/100 };
+    });
+    setMonthly(newMonthly);
   };
 
   React.useEffect(()=>{ recalcMonthly(transactions); }, [transactions]);
@@ -470,6 +523,35 @@ export default function App(){
     setLiquid(INITIAL_LIQUID); setIlliquid(INITIAL_ILLIQUID); setBills(INITIAL_BILLS); setMonthly(INITIAL_MONTHLY); setTransactions([]); setCategories(INITIAL_CATEGORIES);
   };
 
+  const addManualTransaction = () => {
+    if (!newTx.description.trim() || !newTx.amount) { alert('Need description and amount'); return; }
+    const amtNum = parseFloat(newTx.amount);
+    if (isNaN(amtNum) || amtNum===0) { alert('Invalid amount'); return; }
+    const finalAmount = newTx.type==='expense' ? -Math.abs(amtNum) : Math.abs(amtNum);
+    const tx: Transaction = {
+      id: `manual-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
+      date: newTx.date,
+      description: newTx.description.toUpperCase().trim(),
+      amount: finalAmount,
+      category: newTx.category,
+      account: 'Manual',
+      type: newTx.type
+    };
+    setTransactions(prev=> [tx, ...prev].sort((a,b)=> b.date.localeCompare(a.date)));
+    setShowAddTx(false);
+    setNewTx({date: new Date().toISOString().slice(0,10), description:'', amount:'', category:'Other', type:'expense'});
+  };
+
+  const duplicateTransaction = (t: Transaction) => {
+    const dup: Transaction = {
+      ...t,
+      id: `dup-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
+      date: new Date().toISOString().slice(0,10)
+    };
+    setTransactions(prev=> [dup, ...prev].sort((a,b)=> b.date.localeCompare(a.date)));
+  };
+
+
   const addCategory = () => {
     if (!newCatName.trim()) return;
     if (categories.find(c=>c.name.toLowerCase()===newCatName.trim().toLowerCase())) { alert('exists'); return; }
@@ -585,7 +667,7 @@ export default function App(){
                 </div>
                 {netWorthHistory.length>0 && (
                   <div className="mt-3 text-[11px] flex gap-3">
-                    {(()=>{ const firstNonZero = netWorthHistory.find(h=>h.netWorth>0) || netWorthHistory[0]; const start = firstNonZero?.netWorth||0; const change = netWorth - start; const pct = start>0 ? ((change/start)*100) : 0; return <><span>Start: {fmt(start)}</span><span className={change>=0 ? 'text-emerald-600' : 'text-red-600'}>Change: {fmt(change)} {netWorthHistory.length>1 && start>0 ? `(${pct.toFixed(1)}%)` : start===0 ? '' : ''}</span></>; })()}
+                    {(()=>{ const firstNonZero = netWorthHistory.find(h=>h.netWorth>0) || netWorthHistory[0]; const start = firstNonZero?.netWorth||0; const change = netWorth - start; const pct = start>0 ? ((change/start)*100) : 0; return <><span>Start: {fmt(start)}</span><span className={change>=0 ? 'text-emerald-600' : 'text-red-600'}>Change: {fmt(change)} {netWorthHistory.length>1 && start>0 ? `(${pct.toFixed(1)}%)` : ''}</span></>; })()}
                     <button onClick={()=> { if(confirm('Clear net worth history?')) { setNetWorthHistory([]); localStorage.removeItem('fam-nw-history'); } }} className="ml-auto text-slate-400 underline">Clear</button>
                   </div>
                 )}
@@ -617,6 +699,7 @@ export default function App(){
             </div>
             <div className="rounded-2xl bg-white border overflow-hidden">
               <div className="px-5 py-4 border-b flex gap-2 items-center flex-wrap">
+                <button onClick={()=> setShowAddTx(v=>!v)} className="px-3 py-2 rounded-xl bg-emerald-600 text-white text-xs font-semibold">+ Add Transaction</button>
                 <Search size={14} className="text-slate-400"/>
                 <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search" className="px-3 py-2 rounded-xl bg-slate-50 border text-xs w-[200px]"/>
                 <select value={filterYear} onChange={e=>setFilterYear(e.target.value)} className="px-2.5 py-2 rounded-xl border text-xs bg-white">
@@ -645,6 +728,25 @@ export default function App(){
                 <select value={filterCat} onChange={e=>setFilterCat(e.target.value)} className="px-2.5 py-2 rounded-xl border text-xs"><option value="All">All</option>{categories.map(c=> <option key={c.name} value={c.name}>{c.name}</option>)}</select>
                 <span className="ml-auto text-[11px]">{filteredTransactions.length} txns • {fmt(filteredExpense)} spent • {filterMonth ? (filterMonthOnly==='All' ? `${filterYear} Year` : filterMonth) : 'All Time'}</span>
               </div>
+              {showAddTx && (
+                <div className="px-5 py-4 bg-emerald-50/50 border-b grid grid-cols-2 md:grid-cols-6 gap-2">
+                  <input type="date" value={newTx.date} onChange={e=> setNewTx({...newTx, date:e.target.value})} className="px-2 py-2 rounded-lg border text-xs"/>
+                  <input value={newTx.description} onChange={e=> setNewTx({...newTx, description:e.target.value})} placeholder="Description" className="px-2 py-2 rounded-lg border text-xs col-span-2"/>
+                  <input type="number" step="0.01" value={newTx.amount} onChange={e=> setNewTx({...newTx, amount:e.target.value})} placeholder="Amount  e.g. 25.50" className="px-2 py-2 rounded-lg border text-xs"/>
+                  <select value={newTx.type} onChange={e=> setNewTx({...newTx, type:e.target.value as any})} className="px-2 py-2 rounded-lg border text-xs bg-white">
+                    <option value="expense">Expense</option>
+                    <option value="income">Income</option>
+                  </select>
+                  <select value={newTx.category} onChange={e=> setNewTx({...newTx, category:e.target.value})} className="px-2 py-2 rounded-lg border text-xs bg-white">
+                    <option value="Income">Income</option>
+                    {categories.map(c=> <option key={c.name} value={c.name}>{c.name}</option>)}
+                  </select>
+                  <div className="col-span-2 md:col-span-6 flex gap-2 justify-end mt-1">
+                    <button onClick={()=> setShowAddTx(false)} className="px-3 py-1.5 rounded-lg bg-white border text-xs">Cancel</button>
+                    <button onClick={addManualTransaction} className="px-4 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-semibold">Add</button>
+                  </div>
+                </div>
+              )}
               <div className="overflow-x-auto">
                 <table className="w-full text-[12px]">
                   <thead className="bg-slate-50"><tr><th className="text-left px-4 py-2.5">Date</th><th className="text-left px-3 py-2.5">Description</th><th className="text-right px-3 py-2.5">Amount</th><th className="text-left px-3 py-2.5">Category - editable</th><th className="px-4"></th></tr></thead>
@@ -660,7 +762,7 @@ export default function App(){
                           if (baseKey2 && baseKey2!==key) next[baseKey2]=newCat;
                           return next;
                         });
-                      }} className="px-2 py-1 rounded-lg border text-[11px] bg-white w-full"><option value="Income">Income</option>{categories.map(c=> <option key={c.name} value={c.name}>{c.name}</option>)}</select></td><td className="px-4 py-2.5 text-right"><button onClick={()=> setTransactions(prev=> prev.filter(x=>x.id!==t.id))} className="text-[11px] text-slate-400">Delete</button></td></tr>))}</tbody>
+                      }} className="px-2 py-1 rounded-lg border text-[11px] bg-white w-full"><option value="Income">Income</option>{categories.map(c=> <option key={c.name} value={c.name}>{c.name}</option>)}</select></td><td className="px-4 py-2.5 text-right flex gap-2 justify-end"><button onClick={()=> duplicateTransaction(t)} className="text-[11px] px-2 py-1 rounded bg-white border hover:bg-slate-50">Duplicate</button><button onClick={()=> setTransactions(prev=> prev.filter(x=>x.id!==t.id))} className="text-[11px] text-slate-400">Delete</button></td></tr>))}</tbody>
                   <tfoot>
                     <tr className="border-t-2 border-slate-900 bg-slate-50 font-bold">
                       <td className="px-4 py-3 text-[12px]">
