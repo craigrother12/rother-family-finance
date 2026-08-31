@@ -518,9 +518,9 @@ export default function App(){
   };
 
   const resetToBlankSlate = () => {
-    if (!confirm('Blank slate? This clears all data.')) return;
     localStorage.clear();
-    setLiquid(INITIAL_LIQUID); setIlliquid(INITIAL_ILLIQUID); setBills(INITIAL_BILLS); setMonthly(INITIAL_MONTHLY); setTransactions([]); setCategories(INITIAL_CATEGORIES);
+    setLiquid(INITIAL_LIQUID); setIlliquid(INITIAL_ILLIQUID); setBills(INITIAL_BILLS); setMonthly(INITIAL_MONTHLY); setTransactions([]); setCategories(INITIAL_CATEGORIES); setNetWorthHistory([]); setLearned({});
+    alert('All data cleared locally. Cloud will be cleared on next sync in 2 sec. To restore, Import your backup JSON.');
   };
 
   const addManualTransaction = () => {
@@ -579,7 +579,7 @@ export default function App(){
       <header className="sticky top-0 z-30 bg-white/80 backdrop-blur border-b">
         <div className="max-w-[1440px] mx-auto px-4 md:px-8 py-4 flex justify-between items-center">
           <div className="flex items-center gap-3"><div className="w-9 h-9 rounded-xl bg-slate-900 text-white grid place-items-center font-black">R</div><div><h1 className="text-[15px] font-bold">Rother Family Finance</h1><p className="text-[11px] text-slate-500">{nowStr()}</p></div></div>
-          <div className="flex items-center gap-2"><div className="hidden md:flex gap-2"><div className="px-3 py-1.5 rounded-full bg-slate-900 text-white text-xs">{fmt(netWorth)}</div><div className="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 text-[11px] border">{fmt(trueLiquidCash)}</div></div><button onClick={exportBackup} className="px-3 py-2 rounded-xl bg-emerald-600 text-white border text-xs font-semibold">Export</button><label className="px-3 py-2 rounded-xl bg-white border text-xs cursor-pointer">Import<input type="file" accept=".json" className="hidden" onChange={e=>{ const f=e.target.files?.[0]; if(f) importBackup(f); e.target.value=''; }}/></label><button onClick={()=>{ try{ sessionStorage.removeItem('fam-auth'); }catch{} location.reload(); }} className="px-3 py-2 rounded-xl bg-white border text-xs">Lock</button><button onClick={resetToBlankSlate} className="px-3 py-2 rounded-xl bg-white border text-xs">Blank</button></div>
+          <div className="flex items-center gap-2"><div className="hidden md:flex gap-2"><div className="px-3 py-1.5 rounded-full bg-slate-900 text-white text-xs">{fmt(netWorth)}</div><div className="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 text-[11px] border">{fmt(trueLiquidCash)}</div></div><button onClick={exportBackup} className="px-3 py-2 rounded-xl bg-emerald-600 text-white border text-xs font-semibold">Export</button><label className="px-3 py-2 rounded-xl bg-white border text-xs cursor-pointer">Import<input type="file" accept=".json" className="hidden" onChange={e=>{ const f=e.target.files?.[0]; if(f) importBackup(f); e.target.value=''; }}/></label><button onClick={()=>{ try{ sessionStorage.removeItem('fam-auth'); }catch{} location.reload(); }} className="px-3 py-2 rounded-xl bg-white border text-xs">Lock</button><button onClick={()=>{ if(!confirm("⚠️ RESET - This will DELETE ALL 1278 transactions, account balances, bills, and history from ALL devices including cloud.\n\nThis cannot be undone unless you have a backup file.\n\nType OK to continue?")) return; if(!confirm("Last chance: Are you SURE you want to blank slate?\n\nExport a backup first if you haven't.")) return; resetToBlankSlate(); }} className="px-3 py-2 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-semibold hover:bg-red-100">Reset</button></div>
         </div>
         <div className="max-w-[1440px] mx-auto px-4 md:px-8 flex gap-1 overflow-x-auto">
           {['overview','accounts','bills','transactions','categories'].map(k=> <button key={k} onClick={()=>setTab(k as any)} className={`px-4 py-3 text-[13px] font-medium border-b-2 ${tab===k?'border-slate-900 text-slate-900':'border-transparent text-slate-500'}`}>{k.charAt(0).toUpperCase()+k.slice(1)}</button>)}
