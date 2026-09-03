@@ -530,6 +530,7 @@ export default function App(){
     const merged = [...newOnes,...transactions].sort((a,b)=> b.date.localeCompare(a.date));
     setTransactions(merged);
     recalcMonthly(merged);
+    setLastImport(nowStr());
     setCsvPreview(null);
   };
 
