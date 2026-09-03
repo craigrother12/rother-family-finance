@@ -255,6 +255,7 @@ export default function App(){
   const [netWorthHistory, setNetWorthHistory] = React.useState<{date:string, timestamp:number, netWorth:number, liquid:number, illiquid:number}[]>(()=> { try { const s=localStorage.getItem('fam-nw-history'); return s?JSON.parse(s):[]; } catch { return []; } });
   const [cloudStatus, setCloudStatus] = React.useState<'offline'|'syncing'|'synced'|'error'>('syncing');
   const [lastSync, setLastSync] = React.useState<string>('');
+  const [lastImport, setLastImport] = React.useState<string>(()=> { try { return localStorage.getItem('fam-last-import') || ''; } catch { return ''; } });
   const isInitialCloudLoad = React.useRef(true);
   const isApplyingRemote = React.useRef(false);
   const lastPushTime = React.useRef(0);
@@ -262,11 +263,7 @@ export default function App(){
   const exportBackup = ()=> { try { const data = { liquid, illiquid, bills, monthly, transactions, categories, learned, netWorthHistory, lastImport, exportedAt: new Date().toISOString(), version: 3 }; const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'}); const url = URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=`rother-finance-backup-${new Date().toISOString().slice(0,10)}.json`; a.click(); URL.revokeObjectURL(url); } catch(e){ alert('Export failed: '+e); } };
   const importBackup = (file: File)=> { const reader = new FileReader(); reader.onload = (e)=> { try { const data = JSON.parse(e.target?.result as string); if (!confirm(`Restore backup from ${data.exportedAt||'unknown'}? ${data.transactions?.length||0} transactions.`)) return; if (data.liquid) setLiquid(data.liquid); if (data.illiquid) setIlliquid(data.illiquid); if (data.bills) setBills(data.bills); if (data.transactions) setTransactions(data.transactions); if (data.categories) setCategories(data.categories); if (data.learned) setLearned(data.learned); if (data.netWorthHistory) setNetWorthHistory(data.netWorthHistory); if ((data as any).lastImport) setLastImport((data as any).lastImport); } catch(err){ alert('Invalid backup: '+err); } }; reader.readAsText(file); };
 
-  const [lastImport, setLastImport] = React.useState<string>(()=> {
-    try { return localStorage.getItem('fam-last-import') || ''; } catch { return ''; }
-  });
   const [transactions, setTransactions] = React.useState<Transaction[]>(()=> { try{ const s=localStorage.getItem('fam-trans'); return s?JSON.parse(s):[]; } catch{ return []; } });
-  React.useEffect(()=>{ if(lastImport) localStorage.setItem('fam-last-import', lastImport); }, [lastImport]);
   const [categories, setCategories] = React.useState<Category[]>(()=> { try{ const s=localStorage.getItem('fam-cats'); return s?JSON.parse(s):INITIAL_CATEGORIES; } catch{ return INITIAL_CATEGORIES; } });
   const [tab, setTab] = React.useState<'overview'|'accounts'|'bills'|'transactions'|'categories'>('overview');
   const [search, setSearch] = React.useState(''); const [filterCat, setFilterCat] = React.useState('All'); const [filterYear, setFilterYear] = React.useState(String(new Date().getFullYear())); const [filterMonthOnly, setFilterMonthOnly] = React.useState(String(new Date().getMonth()+1).padStart(2,'0')); // default to current month, auto-updates
@@ -298,7 +295,7 @@ export default function App(){
           if (d.transactions && d.transactions.length>0) setTransactions(d.transactions); 
           if (d.categories) setCategories(d.categories); 
           if (d.learned) setLearned(d.learned); 
-          if (d.netWorthHistory) setNetWorthHistory(d.netWorthHistory); 
+          if (d.netWorthHistory) setNetWorthHistory(d.netWorthHistory);
           if ((d as any).lastImport) setLastImport((d as any).lastImport);
           setLastSync(new Date(data.updated_at).toLocaleTimeString()); 
           setTimeout(()=> { isApplyingRemote.current = false; }, 2000);
@@ -321,8 +318,8 @@ export default function App(){
         if (d.transactions) setTransactions(d.transactions); 
         if (d.categories) setCategories(d.categories); 
         if (d.learned) setLearned(d.learned); 
-        if (d.netWorthHistory) setNetWorthHistory(d.netWorthHistory); 
-        if ((d as any).lastImport) setLastImport((d as any).lastImport);
+        if (d.netWorthHistory) setNetWorthHistory(d.netWorthHistory);
+        if ((d as any).lastImport) setLastImport((d as any).lastImport); 
         setLastSync(new Date().toLocaleTimeString()); 
         setCloudStatus('synced'); 
         setTimeout(()=> { isApplyingRemote.current = false; }, 2000); 
@@ -334,7 +331,7 @@ export default function App(){
     if (isInitialCloudLoad.current) return; 
     if (isApplyingRemote.current) return; 
     setCloudStatus('syncing'); 
-    const payload = { liquid, illiquid, bills, transactions, categories, learned, netWorthHistory, lastImportiquid, bills, transactions, categories, learned, netWorthHistory, lastImportiquid, bills, transactions, categories, learned, netWorthHistory }; 
+    const payload = { liquid, illiquid, bills, transactions, categories, learned, netWorthHistory, lastImport }; 
     const t = setTimeout(async ()=> { 
       try { 
         const now = Date.now(); 
@@ -355,6 +352,7 @@ export default function App(){
   React.useEffect(()=>{ localStorage.setItem('fam-monthly', JSON.stringify(monthly)); }, [monthly]);
   React.useEffect(()=>{ localStorage.setItem('fam-trans', JSON.stringify(transactions)); }, [transactions]);
   React.useEffect(()=>{ localStorage.setItem('fam-cats', JSON.stringify(categories)); }, [categories]);
+  React.useEffect(()=>{ if(lastImport) localStorage.setItem('fam-last-import', lastImport); }, [lastImport]);
 
   const recalcMonthly = (allTx: Transaction[]) => {
     const monthMap = new Map<string, { income: number; expense: number }>();
@@ -846,7 +844,3 @@ export default function App(){
     </PasswordGate>
   );
 }
-
-
-
-
