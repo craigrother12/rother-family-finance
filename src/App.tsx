@@ -278,6 +278,7 @@ export default function App(){
 
 
   React.useEffect(()=>{ localStorage.setItem('fam-nw-history', JSON.stringify(netWorthHistory)); }, [netWorthHistory]);
+  React.useEffect(()=>{ if (netWorthHistory.length===0 && (liquid.length>0 || illiquid.length>0)) { const totalLiquidAssets = liquid.filter(a=>!a.isDebt).reduce((s,a)=>s+a.amount,0); const totalLiquidDebt = liquid.filter(a=>a.isDebt).reduce((s,a)=>s+a.amount,0); const netLiquid = totalLiquidAssets - totalLiquidDebt; const totalIlliquidAssets = illiquid.filter(a=>!a.isDebt).reduce((s,a)=>s+a.amount,0); const totalIlliquidDebt = illiquid.filter(a=>a.isDebt).reduce((s,a)=>s+a.amount,0); const netIlliquid = totalIlliquidAssets - totalIlliquidDebt; const nw = netLiquid + netIlliquid; if (nw>0) { setNetWorthHistory([{date: new Date().toISOString().slice(0,10), timestamp: Date.now(), netWorth: nw, liquid: netLiquid, illiquid: netIlliquid}]); } } }, []);
   React.useEffect(()=> { 
     const load = async ()=> { 
       try { 
@@ -354,18 +355,41 @@ export default function App(){
     allTx.forEach(t=>{
       if (t.category === 'Transfers') return;
       const mKey = t.date.slice(0,7);
+      if (!/^\d{4}-\d{2}$/.test(mKey)) return;
       const cur = monthMap.get(mKey) || { income: 0, expense: 0 };
       if (t.type==='income') cur.income += Math.abs(t.amount); else cur.expense += Math.abs(t.amount);
       monthMap.set(mKey, cur);
     });
-    const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    const newMonthly = monthNames.map((mName, idx)=>{
-      const mm = String(idx+1).padStart(2,'0');
-      let income=0, expense=0;
-      for (const [k,v] of monthMap.entries()) { if (k.endsWith(`-${mm}`)) { income+=v.income; expense+=v.expense; } }
-      return { month: mName, income: Math.round(income*100)/100, expense: Math.round(expense*100)/100, net: Math.round((income-expense)*100)/100 };
+    // Determine range: from earliest transaction year-month to current month (auto-populate at beginning of month)
+    const now = new Date();
+    const nowKey = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+    let earliestKey = nowKey;
+    if (allTx.length>0) {
+      const keys = Array.from(monthMap.keys()).sort();
+      if (keys.length>0) earliestKey = keys[0] < nowKey ? keys[0] : nowKey;
+      // Also ensure we start at Jan of earliest year for clean YTD
+      const earliestYear = parseInt(earliestKey.slice(0,4));
+      earliestKey = `${earliestYear}-01`;
+    }
+    // Build month list from earliestKey to nowKey inclusive
+    const [startY, startM] = earliestKey.split('-').map(Number);
+    const [endY, endM] = nowKey.split('-').map(Number);
+    const months: {key:string, label:string, month:string, year:string}[] = [];
+    let y = startY, m = startM;
+    while (y < endY || (y===endY && m <= endM)) {
+      const key = `${y}-${String(m).padStart(2,'0')}`;
+      const label = new Date(y, m-1, 1).toLocaleDateString('en-US',{month:'short', year:'numeric'});
+      months.push({key, label, month: new Date(y, m-1, 1).toLocaleDateString('en-US',{month:'short'}), year: String(y)});
+      m++; if (m>12){ m=1; y++; }
+      if (months.length>60) break; // safety 5 years
+    }
+    // Build display: for backward compat, if we have only current year data, show Jan-current month
+    // If data spans multiple years, show all months in range
+    const newMonthly = months.map(({key, label})=>{
+      const v = monthMap.get(key) || {income:0, expense:0};
+      return { month: label, key, income: Math.round(v.income*100)/100, expense: Math.round(v.expense*100)/100, net: Math.round((v.income - v.expense)*100)/100 };
     });
-    setMonthly(newMonthly);
+    setMonthly(newMonthly as any);
   };
 
   React.useEffect(()=>{ recalcMonthly(transactions); }, [transactions]);
@@ -411,8 +435,9 @@ export default function App(){
   const totalLiquidDebt = liquidDebtTotal;
   const netLiquid = totalLiquidAssets - totalLiquidDebt;
   const netWorth = netLiquid + netIlliquid;
-  const ytdNet = monthly.slice(0,8).reduce((s,m)=>s+m.net,0);
-  const currentMonthRec = monthly[7] || { month:'Aug', income:0, expense:0, net:0 };
+  const ytdNet = monthly.filter(m=> (m as any).key?.startsWith(String(new Date().getFullYear()))).reduce((s,m)=>s+m.net,0);
+  const currentYear = new Date().getFullYear();
+  const currentMonthRec = monthly.find(m=> (m as any).key === `${currentYear}-${String(new Date().getMonth()+1).padStart(2,'0')}`) || monthly[monthly.length-1] || { month: new Date().toLocaleDateString('en-US',{month:'short', year:'numeric'}), income:0, expense:0, net:0 } as any;
   const monthlyBillsSum = React.useMemo(()=> bills.reduce((s,b)=> s + b.amountDue * monthlyFactor(b.frequency), 0), [bills]);
 
   const filteredTransactions = React.useMemo(()=> {
@@ -676,8 +701,8 @@ export default function App(){
 
             <div className="rounded-2xl bg-white border p-5">
               <h3 className="font-semibold text-[13px] mb-4">Monthly — auto-updates from transactions (Transfers excluded)</h3>
-              <div className="h-[220px]"><ResponsiveContainer width="100%" height="100%"><BarChart data={monthly.slice(0,8)}><CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false}/><XAxis dataKey="month" tick={{fontSize:11}}/><YAxis tick={{fontSize:11}} tickFormatter={v=>`$${(v/1000).toFixed(0)}k`}/><Tooltip formatter={(v:any)=>fmt(v as number)}/><Bar dataKey="income" fill="#0f172a" radius={[6,6,0,0]}/><Bar dataKey="expense" fill="#ef4444" radius={[6,6,0,0]}/></BarChart></ResponsiveContainer></div>
-              <div className="mt-4 overflow-x-auto"><table className="w-full text-[12px]"><thead><tr className="text-slate-500 bg-slate-50/80"><th className="text-left font-medium px-4 py-2">Month</th><th className="text-right font-medium px-3 py-2">Income</th><th className="text-right font-medium px-3 py-2">Expenses</th><th className="text-right font-medium px-3 py-2">Net</th></tr></thead><tbody>{monthly.slice(0,8).map(m=> <tr key={m.month} className="border-t"><td className="px-4 py-2 font-medium">{m.month}</td><td className="px-3 py-2 text-right">{fmt(m.income)}</td><td className="px-3 py-2 text-right text-red-600">{fmt(m.expense)}</td><td className={`px-3 py-2 text-right font-semibold ${m.net<0?'text-red-600':'text-emerald-600'}`}>{fmt(m.net)}</td></tr>)}<tr className="border-t-2 border-slate-900 font-bold bg-slate-50"><td className="px-4 py-2">YTD</td><td className="px-3 py-2 text-right">{fmt(monthly.slice(0,8).reduce((s,m)=>s+m.income,0))}</td><td className="px-3 py-2 text-right">{fmt(monthly.slice(0,8).reduce((s,m)=>s+m.expense,0))}</td><td className="px-3 py-2 text-right">{fmt(ytdNet)}</td></tr></tbody></table></div>
+              <div className="h-[220px]"><ResponsiveContainer width="100%" height="100%"><BarChart data={monthly.slice(-12)}><CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false}/><XAxis dataKey="month" tick={{fontSize:11}}/><YAxis tick={{fontSize:11}} tickFormatter={v=>`$${(v/1000).toFixed(0)}k`}/><Tooltip formatter={(v:any)=>fmt(v as number)}/><Bar dataKey="income" fill="#0f172a" radius={[6,6,0,0]}/><Bar dataKey="expense" fill="#ef4444" radius={[6,6,0,0]}/></BarChart></ResponsiveContainer></div>
+              <div className="mt-4 overflow-x-auto"><table className="w-full text-[12px]"><thead><tr className="text-slate-500 bg-slate-50/80"><th className="text-left font-medium px-4 py-2">Month</th><th className="text-right font-medium px-3 py-2">Income</th><th className="text-right font-medium px-3 py-2">Expenses</th><th className="text-right font-medium px-3 py-2">Net</th></tr></thead><tbody>{monthly.slice(-12).map(m=> <tr key={m.month} className="border-t"><td className="px-4 py-2 font-medium">{m.month}</td><td className="px-3 py-2 text-right">{fmt(m.income)}</td><td className="px-3 py-2 text-right text-red-600">{fmt(m.expense)}</td><td className={`px-3 py-2 text-right font-semibold ${m.net<0?'text-red-600':'text-emerald-600'}`}>{fmt(m.net)}</td></tr>)}<tr className="border-t-2 border-slate-900 font-bold bg-slate-50"><td className="px-4 py-2">YTD</td><td className="px-3 py-2 text-right">{fmt(monthly.slice(0, Math.max(9, new Date().getMonth()+1)).reduce((s,m)=>s+m.income,0))}</td><td className="px-3 py-2 text-right">{fmt(monthly.slice(0, Math.max(9, new Date().getMonth()+1)).reduce((s,m)=>s+m.expense,0))}</td><td className="px-3 py-2 text-right">{fmt(ytdNet)}</td></tr></tbody></table></div>
             </div>
           </div>
         )}
@@ -828,3 +853,4 @@ export default function App(){
     </PasswordGate>
   );
 }
+
