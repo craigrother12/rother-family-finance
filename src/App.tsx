@@ -259,10 +259,14 @@ export default function App(){
   const isApplyingRemote = React.useRef(false);
   const lastPushTime = React.useRef(0);
   const isDuplicate = React.useCallback((newTxn: Transaction, existing: Transaction[])=> existing.some(t=> t.date===newTxn.date && t.amount===newTxn.amount && t.name.trim().toLowerCase()===newTxn.name.trim().toLowerCase() && (t.account||'')===(newTxn.account||'')), []);
-  const exportBackup = ()=> { try { const data = { liquid, illiquid, bills, monthly, transactions, categories, learned, netWorthHistory, exportedAt: new Date().toISOString(), version: 3 }; const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'}); const url = URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=`rother-finance-backup-${new Date().toISOString().slice(0,10)}.json`; a.click(); URL.revokeObjectURL(url); } catch(e){ alert('Export failed: '+e); } };
-  const importBackup = (file: File)=> { const reader = new FileReader(); reader.onload = (e)=> { try { const data = JSON.parse(e.target?.result as string); if (!confirm(`Restore backup from ${data.exportedAt||'unknown'}? ${data.transactions?.length||0} transactions.`)) return; if (data.liquid) setLiquid(data.liquid); if (data.illiquid) setIlliquid(data.illiquid); if (data.bills) setBills(data.bills); if (data.transactions) setTransactions(data.transactions); if (data.categories) setCategories(data.categories); if (data.learned) setLearned(data.learned); if (data.netWorthHistory) setNetWorthHistory(data.netWorthHistory); } catch(err){ alert('Invalid backup: '+err); } }; reader.readAsText(file); };
+  const exportBackup = ()=> { try { const data = { liquid, illiquid, bills, monthly, transactions, categories, learned, netWorthHistory, lastImport, exportedAt: new Date().toISOString(), version: 3 }; const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'}); const url = URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=`rother-finance-backup-${new Date().toISOString().slice(0,10)}.json`; a.click(); URL.revokeObjectURL(url); } catch(e){ alert('Export failed: '+e); } };
+  const importBackup = (file: File)=> { const reader = new FileReader(); reader.onload = (e)=> { try { const data = JSON.parse(e.target?.result as string); if (!confirm(`Restore backup from ${data.exportedAt||'unknown'}? ${data.transactions?.length||0} transactions.`)) return; if (data.liquid) setLiquid(data.liquid); if (data.illiquid) setIlliquid(data.illiquid); if (data.bills) setBills(data.bills); if (data.transactions) setTransactions(data.transactions); if (data.categories) setCategories(data.categories); if (data.learned) setLearned(data.learned); if (data.netWorthHistory) setNetWorthHistory(data.netWorthHistory); if ((data as any).lastImport) setLastImport((data as any).lastImport); } catch(err){ alert('Invalid backup: '+err); } }; reader.readAsText(file); };
 
+  const [lastImport, setLastImport] = React.useState<string>(()=> {
+    try { return localStorage.getItem('fam-last-import') || ''; } catch { return ''; }
+  });
   const [transactions, setTransactions] = React.useState<Transaction[]>(()=> { try{ const s=localStorage.getItem('fam-trans'); return s?JSON.parse(s):[]; } catch{ return []; } });
+  React.useEffect(()=>{ if(lastImport) localStorage.setItem('fam-last-import', lastImport); }, [lastImport]);
   const [categories, setCategories] = React.useState<Category[]>(()=> { try{ const s=localStorage.getItem('fam-cats'); return s?JSON.parse(s):INITIAL_CATEGORIES; } catch{ return INITIAL_CATEGORIES; } });
   const [tab, setTab] = React.useState<'overview'|'accounts'|'bills'|'transactions'|'categories'>('overview');
   const [search, setSearch] = React.useState(''); const [filterCat, setFilterCat] = React.useState('All'); const [filterYear, setFilterYear] = React.useState(String(new Date().getFullYear())); const [filterMonthOnly, setFilterMonthOnly] = React.useState(String(new Date().getMonth()+1).padStart(2,'0')); // default to current month, auto-updates
@@ -295,6 +299,7 @@ export default function App(){
           if (d.categories) setCategories(d.categories); 
           if (d.learned) setLearned(d.learned); 
           if (d.netWorthHistory) setNetWorthHistory(d.netWorthHistory); 
+          if ((d as any).lastImport) setLastImport((d as any).lastImport);
           setLastSync(new Date(data.updated_at).toLocaleTimeString()); 
           setTimeout(()=> { isApplyingRemote.current = false; }, 2000);
         } 
@@ -317,6 +322,7 @@ export default function App(){
         if (d.categories) setCategories(d.categories); 
         if (d.learned) setLearned(d.learned); 
         if (d.netWorthHistory) setNetWorthHistory(d.netWorthHistory); 
+        if ((d as any).lastImport) setLastImport((d as any).lastImport);
         setLastSync(new Date().toLocaleTimeString()); 
         setCloudStatus('synced'); 
         setTimeout(()=> { isApplyingRemote.current = false; }, 2000); 
@@ -328,7 +334,7 @@ export default function App(){
     if (isInitialCloudLoad.current) return; 
     if (isApplyingRemote.current) return; 
     setCloudStatus('syncing'); 
-    const payload = { liquid, illiquid, bills, transactions, categories, learned, netWorthHistory }; 
+    const payload = { liquid, illiquid, bills, transactions, categories, learned, netWorthHistory, lastImportiquid, bills, transactions, categories, learned, netWorthHistory, lastImportiquid, bills, transactions, categories, learned, netWorthHistory }; 
     const t = setTimeout(async ()=> { 
       try { 
         const now = Date.now(); 
@@ -340,7 +346,7 @@ export default function App(){
       } catch(e){ console.error(e); setCloudStatus('error'); } 
     }, 2000); 
     return ()=> clearTimeout(t); 
-  }, [liquid, illiquid, bills, transactions, categories, learned, netWorthHistory]);
+  }, [liquid, illiquid, bills, transactions, categories, learned, netWorthHistory, lastImport]);
 
 
   React.useEffect(()=>{ localStorage.setItem('fam-liquid', JSON.stringify(liquid)); }, [liquid]);
@@ -590,7 +596,7 @@ export default function App(){
     <div className="min-h-screen bg-[#f8fafc] text-slate-900">
       <header className="sticky top-0 z-30 bg-white/80 backdrop-blur border-b">
         <div className="max-w-[1440px] mx-auto px-4 md:px-8 py-4 flex justify-between items-center">
-          <div className="flex items-center gap-3"><div className="w-9 h-9 rounded-xl bg-slate-900 text-white grid place-items-center font-black">R</div><div><h1 className="text-[15px] font-bold">Rother Family Finance</h1><p className="text-[11px] text-slate-500">{nowStr()}</p></div></div>
+          <div className="flex items-center gap-3"><div className="w-9 h-9 rounded-xl bg-slate-900 text-white grid place-items-center font-black">R</div><div><h1 className="text-[15px] font-bold">Rother Family Finance</h1><p className="text-[11px] text-slate-500">{lastImport ? `Last import: ${lastImport}` : nowStr()}</p></div></div>
           <div className="flex items-center gap-2"><div className="hidden md:flex gap-2"><div className="px-3 py-1.5 rounded-full bg-slate-900 text-white text-xs">{fmt(netWorth)}</div><div className="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 text-[11px] border">{fmt(trueLiquidCash)}</div></div><button onClick={exportBackup} className="px-3 py-2 rounded-xl bg-emerald-600 text-white border text-xs font-semibold">Export</button><label className="px-3 py-2 rounded-xl bg-white border text-xs cursor-pointer">Import<input type="file" accept=".json" className="hidden" onChange={e=>{ const f=e.target.files?.[0]; if(f) importBackup(f); e.target.value=''; }}/></label><button onClick={()=>{ try{ sessionStorage.removeItem('fam-auth'); }catch{} location.reload(); }} className="px-3 py-2 rounded-xl bg-white border text-xs">Lock</button><button onClick={()=>{ if(!confirm("⚠️ RESET - This will DELETE ALL 1278 transactions, account balances, bills, and history from ALL devices including cloud.\n\nThis cannot be undone unless you have a backup file.\n\nType OK to continue?")) return; if(!confirm("Last chance: Are you SURE you want to blank slate?\n\nExport a backup first if you haven't.")) return; resetToBlankSlate(); }} className="px-3 py-2 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-semibold hover:bg-red-100">Reset</button></div>
         </div>
         <div className="max-w-[1440px] mx-auto px-4 md:px-8 flex gap-1 overflow-x-auto">
@@ -840,6 +846,7 @@ export default function App(){
     </PasswordGate>
   );
 }
+
 
 
 
