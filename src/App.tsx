@@ -265,7 +265,7 @@ export default function App(){
   const [transactions, setTransactions] = React.useState<Transaction[]>(()=> { try{ const s=localStorage.getItem('fam-trans'); return s?JSON.parse(s):[]; } catch{ return []; } });
   const [categories, setCategories] = React.useState<Category[]>(()=> { try{ const s=localStorage.getItem('fam-cats'); return s?JSON.parse(s):INITIAL_CATEGORIES; } catch{ return INITIAL_CATEGORIES; } });
   const [tab, setTab] = React.useState<'overview'|'accounts'|'bills'|'transactions'|'categories'>('overview');
-  const [search, setSearch] = React.useState(''); const [filterCat, setFilterCat] = React.useState('All'); const [filterYear, setFilterYear] = React.useState('2026'); const [filterMonthOnly, setFilterMonthOnly] = React.useState('08'); // 'All' for whole year
+  const [search, setSearch] = React.useState(''); const [filterCat, setFilterCat] = React.useState('All'); const [filterYear, setFilterYear] = React.useState(String(new Date().getFullYear())); const [filterMonthOnly, setFilterMonthOnly] = React.useState(String(new Date().getMonth()+1).padStart(2,'0')); // default to current month, auto-updates
   const [showAddTx, setShowAddTx] = React.useState(false);
   const [newTx, setNewTx] = React.useState<{date:string, description:string, amount:string, category:string, type:'income'|'expense'}>({date: new Date().toISOString().slice(0,10), description:'', amount:'', category:'Other', type:'expense'});
   const filterMonth = filterYear === 'All' ? '' : filterMonthOnly === 'All' ? filterYear : `${filterYear}-${filterMonthOnly}`;
@@ -360,13 +360,12 @@ export default function App(){
       if (t.type==='income') cur.income += Math.abs(t.amount); else cur.expense += Math.abs(t.amount);
       monthMap.set(mKey, cur);
     });
-    // ONLY show 2026 (as requested) - from Jan to current month in 2026 (Sep)
-    const targetYear = 2026;
+    // ALWAYS show current year only - auto-rolls every Jan 1st
     const now = new Date();
-    const currentMonthInYear = now.getFullYear() === targetYear ? now.getMonth()+1 : 12;
-    // If we have Sep 2026 data, show at least through Sep
-    const maxMonthWithData = Array.from(monthMap.keys()).filter(k=>k.startsWith('2026-')).map(k=> parseInt(k.slice(5,7))).reduce((a,b)=> Math.max(a,b), 0);
-    const endMonth = Math.max(currentMonthInYear, maxMonthWithData, 9); // at least Sep
+    const targetYear = now.getFullYear();
+    const currentMonthInYear = now.getMonth()+1;
+    const maxMonthWithData = Array.from(monthMap.keys()).filter(k=>k.startsWith(String(targetYear)+'-')).map(k=> parseInt(k.slice(5,7))).reduce((a,b)=> Math.max(a,b), 0);
+    const endMonth = Math.max(currentMonthInYear, maxMonthWithData); // auto-populates at beginning of month
     const months: {key:string, label:string}[] = [];
     for (let m=1; m<=endMonth; m++) {
       const key = `${targetYear}-${String(m).padStart(2,'0')}`;
@@ -424,8 +423,8 @@ export default function App(){
   const netLiquid = totalLiquidAssets - totalLiquidDebt;
   const netWorth = netLiquid + netIlliquid;
   const ytdNet = monthly.reduce((s,m)=>s+m.net,0);
-  const currentYear = 2026;
-  const currentMonthRec = monthly.find(m=> (m as any).key === `${currentYear}-${String(new Date().getMonth()+1).padStart(2,'0')}`) || monthly[monthly.length-1] || { month: 'Sep 2026', income:0, expense:0, net:0 } as any;
+  const currentYear = new Date().getFullYear();
+  const currentMonthRec = monthly.find(m=> (m as any).key === `${currentYear}-${String(new Date().getMonth()+1).padStart(2,'0')}`) || monthly[monthly.length-1] || { month: new Date().toLocaleDateString('en-US',{month:'short', year:'numeric'}), income:0, expense:0, net:0 } as any;
   const monthlyBillsSum = React.useMemo(()=> bills.reduce((s,b)=> s + b.amountDue * monthlyFactor(b.frequency), 0), [bills]);
 
   const filteredTransactions = React.useMemo(()=> {
@@ -841,5 +840,6 @@ export default function App(){
     </PasswordGate>
   );
 }
+
 
 
