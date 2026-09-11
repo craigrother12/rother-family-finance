@@ -611,7 +611,7 @@ export default function App(){
               <div className="rounded-2xl bg-white border p-5"><p className="text-[11px] uppercase text-slate-500">{(currentMonthRec as any).month?.toUpperCase() || new Date().toLocaleDateString('en-US',{month:'short', year:'numeric'}).toUpperCase()} NET</p><p className={`text-2xl font-bold mt-1 ${currentMonthRec.net<0?'text-red-600':'text-emerald-600'}`}>{fmt(currentMonthRec.net)}</p><p className="text-[11px] text-slate-500 mt-1">{transactions.length} txns • YTD {fmt(ytdNet)}</p></div>
               <div className="rounded-2xl bg-white border p-5"><p className="text-[11px] uppercase text-slate-500">Bills — {new Date().toLocaleDateString('en-US',{month:'long', year:'numeric'})}</p><p className="text-2xl font-bold mt-1">{fmt(monthlyBillsSum)}</p><p className="text-[10px] text-slate-500 mt-1">{bills.filter(b=>!b.isPaid).length} unpaid • due this month</p></div>
             </div>
-            <div className="grid lg:grid-cols-2 gap-6">
+            <div className="grid lg:grid-cols-1 gap-6">
               <div className="rounded-2xl bg-white border p-5">
                 <h3 className="font-semibold text-[13px] mb-1">Spending by Category — {filterMonth || 'All Time'}</h3>
                 <p className="text-[11px] text-slate-500 mb-4">Excludes Income & Transfers • {filteredTransactions.filter(t=>t.amount<0).length} expenses</p>
@@ -661,34 +661,6 @@ export default function App(){
                 </div>
               </div>
 
-              <div className="rounded-2xl bg-white border p-5">
-                <h3 className="font-semibold text-[13px] mb-1">Net Worth History</h3>
-                <p className="text-[11px] text-slate-500 mb-4">Logs every time you change an account balance in Accounts tab • {netWorthHistory.length} snapshots</p>
-                <div className="h-[280px]">
-                  {netWorthHistory.length < 2 ? (
-                    <div className="h-full grid place-items-center text-center"><div><p className="text-[13px] font-medium">Not enough history yet</p><p className="text-[11px] text-slate-500 mt-1">Go to Accounts tab and update a balance.<br/>Each save creates a timestamped snapshot.</p><p className="text-[11px] mt-3 font-mono bg-slate-50 border rounded px-2 py-1 inline-block">{fmt(netWorth)} now</p></div></div>
-                  ) : (
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={netWorthHistory.map(h=> ({ ...h, dateLabel: new Date(h.timestamp).toLocaleDateString('en-US',{month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}) }))}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false}/>
-                        <XAxis dataKey="dateLabel" tick={{fontSize:10}} interval="preserveStartEnd"/>
-                        <YAxis tick={{fontSize:11}} tickFormatter={v=> `$${(v/1000).toFixed(0)}k`}/>
-                        <Tooltip formatter={(v:any)=> fmt(v as number)}/>
-                        <Legend />
-                        <Line type="monotone" dataKey="netWorth" name="Net Worth" stroke="#0f172a" strokeWidth={2.5} dot={{r:3}} />
-                        <Line type="monotone" dataKey="liquid" name="Liquid" stroke="#10b981" strokeWidth={1.5} dot={false} />
-                        <Line type="monotone" dataKey="illiquid" name="Illiquid" stroke="#6366f1" strokeWidth={1.5} dot={false} />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  )}
-                </div>
-                {netWorthHistory.length>0 && (
-                  <div className="mt-3 text-[11px] flex gap-3">
-                    {(()=>{ const firstNonZero = netWorthHistory.find(h=>h.netWorth>0) || netWorthHistory[0]; const start = firstNonZero?.netWorth||0; const change = netWorth - start; const pct = start>0 ? ((change/start)*100) : 0; return <><span>Start: {fmt(start)}</span><span className={change>=0 ? 'text-emerald-600' : 'text-red-600'}>Change: {fmt(change)} {netWorthHistory.length>1 && start>0 ? `(${pct.toFixed(1)}%)` : ''}</span></>; })()}
-                    <button onClick={()=> { if(confirm('Clear net worth history?')) { setNetWorthHistory([]); localStorage.removeItem('fam-nw-history'); } }} className="ml-auto text-slate-400 underline">Clear</button>
-                  </div>
-                )}
-              </div>
             </div>
 
             <div className="rounded-2xl bg-white border p-5">
@@ -845,3 +817,4 @@ export default function App(){
     </PasswordGate>
   );
 }
+
