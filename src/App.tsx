@@ -10,7 +10,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGri
 import { Upload, Wallet, Home, Plus, Search, CalendarDays } from 'lucide-react';
 
 type Account = { id: string; name: string; amount: number; asOf: string; history: {date:string; amount:number}[]; type: string; isDebt?: boolean };
-type Bill = { id: string; name: string; frequency: string; amountDue: number; isPaid: boolean; dueDay?: number };
+type Bill = { id: string; name: string; frequency: string; amountDue: number; isPaid: boolean; dueDay?: number; dueMonth?: number };
 type MonthlyRecord = { month: string; income: number; expense: number; net: number };
 type Category = { name: string; lastMonth: number; currentMonth: number; color: string };
 type Transaction = { id: string; date: string; description: string; amount: number; category: string; account: string; type: 'income'|'expense' };
@@ -429,7 +429,39 @@ export default function App(){
   const ytdNet = monthly.reduce((s,m)=>s+m.net,0);
   const currentYear = new Date().getFullYear();
   const currentMonthRec = monthly.find(m=> (m as any).key === `${currentYear}-${String(new Date().getMonth()+1).padStart(2,'0')}`) || monthly[monthly.length-1] || { month: new Date().toLocaleDateString('en-US',{month:'short', year:'numeric'}), income:0, expense:0, net:0 } as any;
-  const monthlyBillsSum = React.useMemo(()=> bills.reduce((s,b)=> s + b.amountDue * monthlyFactor(b.frequency), 0), [bills]);
+  const monthlyBillsSum = React.useMemo(()=> {
+    const currentMonth = new Date().getMonth()+1; // 1-12, Sep = 9
+    return bills.reduce((s,b)=> {
+      if (!b.amountDue) return s;
+      const freq = b.frequency;
+      const dueMonth = b.dueMonth;
+      // Monthly and specific day bills are due every month
+      if (freq==='Monthly' || ['1st','8th','15th','16th','18th','24th'].includes(freq)) return s + b.amountDue;
+      // Yearly: due only in its dueMonth, if no dueMonth set, assume current month (so Sept shows Car Tax)
+      if (freq==='Yearly') {
+        if (!dueMonth) return s + b.amountDue; // legacy bills without month - show in current month
+        return dueMonth === currentMonth ? s + b.amountDue : s;
+      }
+      if (freq==='Bi-Yearly') {
+        if (!dueMonth) return s + b.amountDue;
+        return (dueMonth === currentMonth || ((dueMonth+5)%12)+1 === currentMonth || ((dueMonth+6-1)%12)+1 === currentMonth) ? s + b.amountDue : s;
+        // simplified: if dueMonth is 1 and 7 etc - but for now check 6 months apart
+      }
+      if (freq==='Quarterly') {
+        if (!dueMonth) return s + b.amountDue;
+        // Quarterly: dueMonth, dueMonth+3, +6, +9
+        const months = [dueMonth, ((dueMonth+2)%12)+1, ((dueMonth+5)%12)+1, ((dueMonth+8)%12)+1];
+        // Correct quarterly: every 3 months
+        const qMonths = [dueMonth, ((dueMonth+3-1)%12)+1, ((dueMonth+6-1)%12)+1, ((dueMonth+9-1)%12)+1];
+        return qMonths.includes(currentMonth) ? s + b.amountDue : s;
+      }
+      if (freq==='Rarely') {
+        if (!dueMonth) return s; // Rarely without month = don't include unless set
+        return dueMonth === currentMonth ? s + b.amountDue : s;
+      }
+      return s;
+    }, 0);
+  }, [bills]);
 
   const filteredTransactions = React.useMemo(()=> {
     return transactions.filter(t=>{
@@ -666,7 +698,7 @@ export default function App(){
             <div className="rounded-2xl bg-white border p-5">
               <h3 className="font-semibold text-[13px] mb-4">Monthly — auto-updates from transactions (Transfers excluded)</h3>
               <div className="h-[220px]"><ResponsiveContainer width="100%" height="100%"><BarChart data={monthly}><CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false}/><XAxis dataKey="month" tick={{fontSize:11}}/><YAxis tick={{fontSize:11}} tickFormatter={v=>`$${(v/1000).toFixed(0)}k`}/><Tooltip formatter={(v:any)=>fmt(v as number)}/><Bar dataKey="income" fill="#0f172a" radius={[6,6,0,0]}/><Bar dataKey="expense" fill="#ef4444" radius={[6,6,0,0]}/></BarChart></ResponsiveContainer></div>
-              <div className="mt-4 overflow-x-auto"><table className="w-full text-[12px]"><thead><tr className="text-slate-500 bg-slate-50/80"><th className="text-left font-medium px-4 py-2">Month</th><th className="text-right font-medium px-3 py-2">Income</th><th className="text-right font-medium px-3 py-2">Expenses</th><th className="text-right font-medium px-3 py-2">Net</th></tr></thead><tbody>{monthly.map(m=> <tr key={m.month} className="border-t"><td className="px-4 py-2 font-medium">{m.month}</td><td className="px-3 py-2 text-right">{fmt(m.income)}</td><td className="px-3 py-2 text-right text-red-600">{fmt(m.expense)}</td><td className={`px-3 py-2 text-right font-semibold ${m.net<0?'text-red-600':'text-emerald-600'}`}>{fmt(m.net)}</td></tr>)}<tr className="border-t-2 border-slate-900 font-bold bg-slate-50"><td className="px-4 py-2">YTD</td><td className="px-3 py-2 text-right">{fmt(monthly.slice(0, Math.max(9, new Date().getMonth()+1)).reduce((s,m)=>s+m.income,0))}</td><td className="px-3 py-2 text-right">{fmt(monthly.slice(0, Math.max(9, new Date().getMonth()+1)).reduce((s,m)=>s+m.expense,0))}</td><td className="px-3 py-2 text-right">{fmt(ytdNet)}</td></tr></tbody></table></div>
+              <div className="mt-4 overflow-x-auto"><table className="w-full text-[12px]"><thead><tr className="text-slate-500 bg-slate-50/80"><th className="text-left font-medium px-4 py-2">Month</th><th className="text-right font-medium px-3 py-2">Income</th><th className="text-right font-medium px-3 py-2">Expenses</th><th className="text-right font-medium px-3 py-2">Net</th></tr></thead><tbody>{monthly.map(m=> <tr key={m.month} className="border-t"><td className="px-4 py-2 font-medium">{m.month}</td><td className="px-3 py-2 text-right">{fmt(m.income)}</td><td className="px-3 py-2 text-right text-red-600">{fmt(m.expense)}</td><td className={`px-3 py-2 text-right font-semibold ${m.net<0?'text-red-600':'text-emerald-600'}`}>{fmt(m.net)}</td></tr>)}<tr className="border-t-2 border-slate-900 font-bold bg-slate-50"><td className="px-4 py-2">YTD</td><td className="px-3 py-2 text-right">{fmt(monthly.reduce((s,m)=>s+m.income,0))}</td><td className="px-3 py-2 text-right">{fmt(monthly.reduce((s,m)=>s+m.expense,0))}</td><td className="px-3 py-2 text-right">{fmt(ytdNet)}</td></tr></tbody></table></div>
             </div>
           </div>
         )}
@@ -685,7 +717,7 @@ export default function App(){
               </div>
               <div className="text-right text-[11px] text-slate-400">{new Date().toLocaleDateString('en-US',{weekday:'long'})}</div>
             </div>
-          <div className="rounded-2xl bg-white border overflow-hidden"><div className="px-5 py-4 border-b flex justify-between items-center"><h3 className="font-semibold text-[13px]">Bills — {new Date().toLocaleDateString('en-US',{month:'long'})}</h3><div className="flex gap-2"><button onClick={()=>{ if(!confirm('Reset ALL bill amounts to $0?')) return; setBills(prev=> prev.map(b=> ({...b, amountDue: 0}))); }} className="px-2.5 py-1 rounded-full bg-red-50 border border-red-200 text-red-700 text-[11px] font-semibold hover:bg-red-100">Reset Amounts to $0</button><button onClick={()=>setBills(prev=> prev.map(b=> ({...b, isPaid: false})))} className="px-2.5 py-1 rounded-full bg-white border text-[11px]">Unpaid all</button><button onClick={()=>setBills(prev=> prev.map(b=> ({...b, isPaid: true})))} className="px-2.5 py-1 rounded-full bg-emerald-50 border text-[11px]">Paid all</button></div></div><div className="overflow-x-auto"><table className="w-full text-[12px]"><thead className="bg-slate-50 text-slate-500"><tr><th className="text-left px-4 py-2.5">Name</th><th className="text-left px-3 py-2.5">Freq</th><th className="text-right px-3 py-2.5">Amount</th><th className="text-center px-3 py-2.5">Paid</th></tr></thead><tbody>{bills.map(b=> (<tr key={b.id} className="border-t"><td className="px-4 py-2.5">{b.name}</td><td className="px-3 py-2.5"><select value={b.frequency} onChange={e=> setBills(prev=> prev.map(x=> x.id===b.id?{...x,frequency:e.target.value}:x))} className="px-2 py-1 rounded-lg border text-[12px]">{FREQUENCIES.map(f=> <option key={f} value={f}>{f}</option>)}</select></td><td className="px-3 py-2.5 text-right"><input type="number" value={b.amountDue} onChange={e=> setBills(prev=> prev.map(x=> x.id===b.id?{...x, amountDue: parseFloat(e.target.value)||0}:x))} className="w-[100px] text-right px-2 py-1 rounded-lg border"/></td><td className="px-3 py-2.5 text-center"><button onClick={()=> setBills(prev=> prev.map(x=> x.id===b.id?{...x,isPaid:!x.isPaid}:x))} className={`px-3 py-1 rounded-full text-[11px] border ${b.isPaid?'bg-emerald-50 border-emerald-200 text-emerald-700':'bg-white border-slate-200'}`}>{b.isPaid?'Paid':'Mark Paid'}</button></td></tr>))}</tbody></table></div></div>
+          <div className="rounded-2xl bg-white border overflow-hidden"><div className="px-5 py-4 border-b flex justify-between items-center"><h3 className="font-semibold text-[13px]">Bills — {new Date().toLocaleDateString('en-US',{month:'long'})} (Car Tax yearly shows in Sept)</h3><div className="flex gap-2"><button onClick={()=>{ if(!confirm('Reset ALL bill amounts to $0?')) return; setBills(prev=> prev.map(b=> ({...b, amountDue: 0}))); }} className="px-2.5 py-1 rounded-full bg-red-50 border border-red-200 text-red-700 text-[11px] font-semibold hover:bg-red-100">Reset Amounts to $0</button><button onClick={()=>setBills(prev=> prev.map(b=> ({...b, isPaid: false})))} className="px-2.5 py-1 rounded-full bg-white border text-[11px]">Unpaid all</button><button onClick={()=>setBills(prev=> prev.map(b=> ({...b, isPaid: true})))} className="px-2.5 py-1 rounded-full bg-emerald-50 border text-[11px]">Paid all</button></div></div><div className="overflow-x-auto"><table className="w-full text-[12px]"><thead className="bg-slate-50 text-slate-500"><tr><th className="text-left px-4 py-2.5">Name</th><th className="text-left px-3 py-2.5">Freq</th><th className="text-left px-3 py-2.5">Due Month</th><th className="text-right px-3 py-2.5">Amount</th><th className="text-center px-3 py-2.5">Paid</th></tr></thead><tbody>{bills.map(b=> (<tr key={b.id} className="border-t"><td className="px-4 py-2.5">{b.name}</td><td className="px-3 py-2.5"><select value={b.frequency} onChange={e=> setBills(prev=> prev.map(x=> x.id===b.id?{...x,frequency:e.target.value}:x))} className="px-2 py-1 rounded-lg border text-[12px]">{FREQUENCIES.map(f=> <option key={f} value={f}>{f}</option>)}</select></td><td className="px-3 py-2.5"><select value={b.dueMonth || ''} onChange={e=> setBills(prev=> prev.map(x=> x.id===b.id?{...x,dueMonth: e.target.value ? parseInt(e.target.value) : undefined}:x))} className="px-2 py-1 rounded-lg border text-[12px]"><option value="">—</option><option value="1">Jan</option><option value="2">Feb</option><option value="3">Mar</option><option value="4">Apr</option><option value="5">May</option><option value="6">Jun</option><option value="7">Jul</option><option value="8">Aug</option><option value="9">Sep</option><option value="10">Oct</option><option value="11">Nov</option><option value="12">Dec</option></select></td><td className="px-3 py-2.5 text-right"><input type="number" value={b.amountDue} onChange={e=> setBills(prev=> prev.map(x=> x.id===b.id?{...x, amountDue: parseFloat(e.target.value)||0}:x))} className="w-[100px] text-right px-2 py-1 rounded-lg border"/></td><td className="px-3 py-2.5 text-center"><button onClick={()=> setBills(prev=> prev.map(x=> x.id===b.id?{...x,isPaid:!x.isPaid}:x))} className={`px-3 py-1 rounded-full text-[11px] border ${b.isPaid?'bg-emerald-50 border-emerald-200 text-emerald-700':'bg-white border-slate-200'}`}>{b.isPaid?'Paid':'Mark Paid'}</button></td></tr>))}</tbody></table></div></div>
           </div>
         )}
         {tab==='transactions' && (
