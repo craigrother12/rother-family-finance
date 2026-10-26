@@ -90,6 +90,8 @@ const BUDGET_LIMITS: Record<string, number> = {
   'Home Improvement': 250,
 };
 
+const BUDGET_ALERT_EMAILS = ['elizabeth.dooley20@gmail.com', 'craigrother12@gmail.com'];
+const BUDGET_ALERTS_STORAGE_KEY = 'fam-budget-alerts-sent';
 
 const FREQUENCIES = ['1st','8th','15th','16th','18th','24th','Monthly','Quarterly','Bi-Yearly','Yearly','Rarely'];
 
@@ -419,7 +421,6 @@ export default function App(){
   const overBudgetAlerts = React.useMemo((): OverBudgetAlert[] => {
     const monthCategoryTotals: Record<string, Record<string, number>> = {};
     const monthCategoryCounts: Record<string, Record<string, number>> = {};
-    
     transactions.forEach(t=>{
       if (t.type !== 'expense') return;
       if (!(t.category in BUDGET_LIMITS)) return;
@@ -436,16 +437,15 @@ export default function App(){
       monthCategoryTotals[monthKey][t.category] += Math.abs(t.amount);
       monthCategoryCounts[monthKey][t.category] += 1;
     });
-
     const alerts: OverBudgetAlert[] = [];
     for (const [monthKey, catMap] of Object.entries(monthCategoryTotals)) {
       for (const [category, total] of Object.entries(catMap)) {
         const limit = BUDGET_LIMITS[category];
         if (!limit) continue;
         if (total > limit) {
-          const [y,m] = monthKey.split('-');
-          const monthLabel = new Date(parseInt(y), parseInt(m)-1, 1).toLocaleDateString('en-US',{month:'long', year:'numeric'});
-          const alertKey = `${monthKey}-${category}`;
+          const parts = monthKey.split('-');
+          const monthLabel = new Date(parseInt(parts[0]), parseInt(parts[1])-1, 1).toLocaleDateString('en-US',{month:'long', year:'numeric'});
+          const alertKey = monthKey + '-' + category;
           if (dismissedAlerts[alertKey]) continue;
           alerts.push({
             monthKey,
@@ -460,33 +460,33 @@ export default function App(){
         }
       }
     }
-    // Sort: current month first, then highest overage
     return alerts.sort((a,b)=> {
       if (a.monthKey !== b.monthKey) return b.monthKey.localeCompare(a.monthKey);
       return b.overBy - a.overBy;
     });
   }, [transactions, dismissedAlerts]);
 
-  const currentMonthKey = `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`;
+  const currentMonthKey = new Date().getFullYear() + '-' + String(new Date().getMonth()+1).padStart(2,'0');
   const currentMonthAlerts = overBudgetAlerts.filter(a=> a.monthKey === currentMonthKey);
   const pastMonthAlerts = overBudgetAlerts.filter(a=> a.monthKey !== currentMonthKey);
 
   const dismissAlert = (alert: OverBudgetAlert) => {
-    const key = `${alert.monthKey}-${alert.category}`;
-    setDismissedAlerts(prev=> ({...prev, [key]: true}));
+    const key = alert.monthKey + '-' + alert.category;
+    setDismissedAlerts(prev=> {
+      const next = {...prev, [key]: true};
+      return next;
+    });
   };
 
   const resetDismissedAlerts = () => {
     if (!confirm('Reset all dismissed budget alerts?')) return;
     setDismissedAlerts({});
-    localStorage.removeItem('fam-budget-dismissed');
+    try { localStorage.removeItem('fam-budget-dismissed'); } catch {}
   };
   // --- END BUDGET ALERT SYSTEM ---
 
   const recalcMonthly = (allTx: Transaction[]) => {
 
-
-  const recalcMonthly = (allTx: Transaction[]) => {
 
     const monthMap = new Map<string, { income: number; expense: number }>();
     allTx.forEach(t=>{
@@ -776,33 +776,31 @@ export default function App(){
                 {currentMonthAlerts.length > 0 && (
                   <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
                     <div className="flex justify-between items-start gap-3">
-                      <div className="flex gap-3">
-                        <div className="w-9 h-9 rounded-xl bg-red-600 text-white grid place-items-center font-bold text-sm">!</div>
-                        <div>
+                      <div className="flex gap-3 flex-1">
+                        <div className="w-9 h-9 rounded-xl bg-red-600 text-white grid place-items-center font-bold text-sm shrink-0">!</div>
+                        <div className="flex-1">
                           <h3 className="font-bold text-[13px] text-red-900">Over Budget This Month — {new Date().toLocaleDateString('en-US',{month:'long', year:'numeric'})}</h3>
                           <div className="mt-2 grid gap-2">
                             {currentMonthAlerts.map(a=> (
                               <div key={a.monthKey+'-'+a.category} className="flex items-center justify-between gap-3 rounded-xl bg-white border border-red-100 px-3 py-2.5">
                                 <div className="flex-1">
-                                  <div className="flex items-center gap-2">
+                                  <div className="flex items-center gap-2 flex-wrap">
                                     <span className="font-semibold text-[12px]">{a.category}</span>
                                     <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">{a.pctOver}% over</span>
                                     <span className="text-[10px] text-slate-500">{a.txnCount} txns</span>
                                   </div>
-                                  <div className="text-[11px] text-slate-600 mt-0.5">
-                                    Spent {fmt(a.spent)} / Budget {fmt(a.limit)} • Over by {fmt(a.overBy)}
-                                  </div>
+                                  <div className="text-[11px] text-slate-600 mt-0.5">Spent {fmt(a.spent)} / Budget {fmt(a.limit)} • Over by {fmt(a.overBy)}</div>
                                   <div className="mt-1.5 w-full h-1.5 rounded-full bg-slate-100 overflow-hidden">
-                                    <div className="h-full bg-red-500 rounded-full" style={{width: `${Math.min(100, (a.spent/a.limit)*100)}%`}}></div>
+                                    <div className="h-full bg-red-500 rounded-full" style={{width: (Math.min(100, (a.spent/a.limit)*100)) + '%'}}></div>
                                   </div>
                                 </div>
-                                <button onClick={()=> dismissAlert(a)} className="text-[11px] px-2.5 py-1 rounded-full bg-white border hover:bg-slate-50">Dismiss</button>
+                                <button onClick={()=> dismissAlert(a)} className="text-[11px] px-2.5 py-1 rounded-full bg-white border hover:bg-slate-50 shrink-0">Dismiss</button>
                               </div>
                             ))}
                           </div>
                         </div>
                       </div>
-                      <button onClick={resetDismissedAlerts} className="text-[10px] text-red-700 underline">Reset</button>
+                      <button onClick={resetDismissedAlerts} className="text-[10px] text-red-700 underline shrink-0">Reset</button>
                     </div>
                   </div>
                 )}
@@ -816,7 +814,7 @@ export default function App(){
                             <div className="font-medium text-[11px]">{a.monthLabel} • {a.category}</div>
                             <div className="text-[10px] text-slate-500">{fmt(a.spent)} / {fmt(a.limit)} (+{fmt(a.overBy)})</div>
                           </div>
-                          <button onClick={()=> dismissAlert(a)} className="text-[10px] px-2 py-1 rounded-full bg-white border">Dismiss</button>
+                          <button onClick={()=> dismissAlert(a)} className="text-[10px] px-2 py-1 rounded-full bg-white border shrink-0">Dismiss</button>
                         </div>
                       ))}
                     </div>
@@ -889,6 +887,7 @@ export default function App(){
               <div className="h-[220px]"><ResponsiveContainer width="100%" height="100%"><BarChart data={monthly}><CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false}/><XAxis dataKey="month" tick={{fontSize:11}}/><YAxis tick={{fontSize:11}} tickFormatter={v=>`$${(v/1000).toFixed(0)}k`}/><Tooltip formatter={(v:any)=>fmt(v as number)}/><Bar dataKey="income" fill="#0f172a" radius={[6,6,0,0]}/><Bar dataKey="expense" fill="#ef4444" radius={[6,6,0,0]}/></BarChart></ResponsiveContainer></div>
               <div className="mt-4 overflow-x-auto"><table className="w-full text-[12px]"><thead><tr className="text-slate-500 bg-slate-50/80"><th className="text-left font-medium px-4 py-2">Month</th><th className="text-right font-medium px-3 py-2">Income</th><th className="text-right font-medium px-3 py-2">Expenses</th><th className="text-right font-medium px-3 py-2">Net</th></tr></thead><tbody>{monthly.map(m=> <tr key={m.month} className="border-t"><td className="px-4 py-2 font-medium">{m.month}</td><td className="px-3 py-2 text-right">{fmt(m.income)}</td><td className="px-3 py-2 text-right text-red-600">{fmt(m.expense)}</td><td className={`px-3 py-2 text-right font-semibold ${m.net<0?'text-red-600':'text-emerald-600'}`}>{fmt(m.net)}</td></tr>)}<tr className="border-t-2 border-slate-900 font-bold bg-slate-50"><td className="px-4 py-2">YTD</td><td className="px-3 py-2 text-right">{fmt(monthly.reduce((s,m)=>s+m.income,0))}</td><td className="px-3 py-2 text-right">{fmt(monthly.reduce((s,m)=>s+m.expense,0))}</td><td className="px-3 py-2 text-right">{fmt(ytdNet)}</td></tr></tbody></table></div>
             </div>
+          </div>
           </div>
         )}
         {tab==='accounts' && (
@@ -1038,6 +1037,8 @@ export default function App(){
     </PasswordGate>
   );
 }
+
+
 
 
 
