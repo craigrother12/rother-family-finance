@@ -409,7 +409,7 @@ export default function App(){
   React.useEffect(()=>{ localStorage.setItem('fam-cats', JSON.stringify(categories)); }, [categories]);
   React.useEffect(()=>{ if(lastImport) localStorage.setItem('fam-last-import', lastImport); }, [lastImport]);
 
-  // --- BUDGET ALERT SYSTEM (IN-APP ONLY) ---
+    // --- BUDGET ALERT SYSTEM (IN-APP ONLY) ---
   const [dismissedAlerts, setDismissedAlerts] = React.useState<Record<string, boolean>>(()=> {
     try { return JSON.parse(localStorage.getItem('fam-budget-dismissed')||'{}'); } catch { return {}; }
   });
@@ -881,13 +881,13 @@ export default function App(){
               </div>
 
             </div>
-            </div>
 
             <div className="rounded-2xl bg-white border p-5">
               <h3 className="font-semibold text-[13px] mb-4">Monthly — auto-updates from transactions (Transfers excluded)</h3>
               <div className="h-[220px]"><ResponsiveContainer width="100%" height="100%"><BarChart data={monthly}><CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false}/><XAxis dataKey="month" tick={{fontSize:11}}/><YAxis tick={{fontSize:11}} tickFormatter={v=>`$${(v/1000).toFixed(0)}k`}/><Tooltip formatter={(v:any)=>fmt(v as number)}/><Bar dataKey="income" fill="#0f172a" radius={[6,6,0,0]}/><Bar dataKey="expense" fill="#ef4444" radius={[6,6,0,0]}/></BarChart></ResponsiveContainer></div>
               <div className="mt-4 overflow-x-auto"><table className="w-full text-[12px]"><thead><tr className="text-slate-500 bg-slate-50/80"><th className="text-left font-medium px-4 py-2">Month</th><th className="text-right font-medium px-3 py-2">Income</th><th className="text-right font-medium px-3 py-2">Expenses</th><th className="text-right font-medium px-3 py-2">Net</th></tr></thead><tbody>{monthly.map(m=> <tr key={m.month} className="border-t"><td className="px-4 py-2 font-medium">{m.month}</td><td className="px-3 py-2 text-right">{fmt(m.income)}</td><td className="px-3 py-2 text-right text-red-600">{fmt(m.expense)}</td><td className={`px-3 py-2 text-right font-semibold ${m.net<0?'text-red-600':'text-emerald-600'}`}>{fmt(m.net)}</td></tr>)}<tr className="border-t-2 border-slate-900 font-bold bg-slate-50"><td className="px-4 py-2">YTD</td><td className="px-3 py-2 text-right">{fmt(monthly.reduce((s,m)=>s+m.income,0))}</td><td className="px-3 py-2 text-right">{fmt(monthly.reduce((s,m)=>s+m.expense,0))}</td><td className="px-3 py-2 text-right">{fmt(ytdNet)}</td></tr></tbody></table></div>
             </div>
+          </div>
           </div>
         )}
         {tab==='accounts' && (
