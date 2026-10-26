@@ -76,23 +76,11 @@ const INITIAL_CATEGORIES: Category[] = [
   { name: 'Childcare', lastMonth: 0, currentMonth: 0, color: '#ef4444' },
   { name: 'Auto Loans', lastMonth: 0, currentMonth: 0, color: '#6b7280' },
   { name: 'Housing', lastMonth: 0, currentMonth: 0, color: '#f97316' },
-  { name: 'Home Improvement', lastMonth: 0, currentMonth: 0, color: '#f97316' },
   { name: 'Bills & Fees', lastMonth: 0, currentMonth: 0, color: '#14b8a6' },
   { name: 'Transfers', lastMonth: 0, currentMonth: 0, color: '#94a3b8' },
   { name: 'Other', lastMonth: 0, currentMonth: 0, color: '#cbd5e1' },
   { name: 'Income', lastMonth: 0, currentMonth: 0, color: '#059669' },
 ];
-
-const BUDGET_LIMITS: Record<string, number> = {
-  'Groceries': 2000,
-  'Shopping': 500,
-  'Amazon': 500,
-  'Home Improvement': 250,
-};
-
-const BUDGET_ALERT_EMAILS = ['elizabeth.dooley20@gmail.com', 'craigrother12@gmail.com'];
-const BUDGET_ALERTS_STORAGE_KEY = 'fam-budget-alerts-sent';
-
 const FREQUENCIES = ['1st','8th','15th','16th','18th','24th','Monthly','Quarterly','Bi-Yearly','Yearly','Rarely'];
 
 function splitCsvRow(row: string): string[] {
@@ -177,7 +165,6 @@ function getCleanCategory(description: string, rawCategory: string, amount: numb
   }
   if (d.includes('venmo')) return 'Other';
   if (d.includes('target') || d.includes('dollar tree') || d.includes('michaels') || d.includes('walmart') || d.includes('tj maxx') || r==='shopping' || (r==='merchandise' &&!d.includes('fresh thyme') &&!d.includes('kroger') &&!d.includes('trader joe')) || r==='personal') return 'Shopping';
-  if (d.includes('home depot') || d.includes('homedepot') || d.includes('lowes') || d.includes("lowe's") || d.includes('menards') || d.includes('ace hardware') || d.includes('harbor freight') || d.includes('sherwin williams') || d.includes('sherwin-williams') || d.includes('home improvement')) return 'Home Improvement';
   if (d.includes('cvs') || d.includes('walgreens') || d.includes('pharmacy') || r.includes('health')) return 'Healthcare';
   if (d.includes('cinema') || d.includes('movie') || d.includes('spotify') || d.includes('netflix') || d.includes('disney plus') || d.includes('spectrum') || r.includes('entertainment')) return 'Entertainment';
   if (d.includes('check paid #') || d.includes('check paid')) return 'Other';
@@ -277,49 +264,7 @@ export default function App(){
   const importBackup = (file: File)=> { const reader = new FileReader(); reader.onload = (e)=> { try { const data = JSON.parse(e.target?.result as string); if (!confirm(`Restore backup from ${data.exportedAt||'unknown'}? ${data.transactions?.length||0} transactions.`)) return; if (data.liquid) setLiquid(data.liquid); if (data.illiquid) setIlliquid(data.illiquid); if (data.bills) setBills(data.bills); if (data.transactions) setTransactions(data.transactions); if (data.categories) setCategories(data.categories); if (data.learned) setLearned(data.learned); if (data.netWorthHistory) setNetWorthHistory(data.netWorthHistory); if ((data as any).lastImport) setLastImport((data as any).lastImport); } catch(err){ alert('Invalid backup: '+err); } }; reader.readAsText(file); };
 
   const [transactions, setTransactions] = React.useState<Transaction[]>(()=> { try{ const s=localStorage.getItem('fam-trans'); return s?JSON.parse(s):[]; } catch{ return []; } });
-  const [categories, setCategories] = React.useState<Category[]>(()=> { 
-    try{ 
-      const s=localStorage.getItem('fam-cats'); 
-      const parsed = s?JSON.parse(s):INITIAL_CATEGORIES;
-      // Deduplicate by lowercase name (protects against manual + hardcoded duplicate)
-      const seen = new Set<string>();
-      const deduped: Category[] = [];
-      for (const c of parsed) {
-        const low = c.name.toLowerCase();
-        if (!seen.has(low)) { seen.add(low); deduped.push(c); }
-      }
-      return deduped;
-    } catch{ 
-      return INITIAL_CATEGORIES; 
-    } 
-  });
-
-  // --- MIGRATION: ensure budget categories exist even if user created manually or has old localStorage ---
-  React.useEffect(()=>{
-    setCategories(prev=>{
-      const existingLower = new Set(prev.map(c=>c.name.toLowerCase()));
-      const toAdd: Category[] = [];
-      for (const budgetCat of Object.keys(BUDGET_LIMITS)) {
-        if (!existingLower.has(budgetCat.toLowerCase())) {
-          toAdd.push({ name: budgetCat, lastMonth: 0, currentMonth: 0, color: budgetCat === 'Home Improvement' ? '#ea580c' : budgetCat === 'Groceries' ? '#10b981' : budgetCat === 'Amazon' ? '#6366f1' : '#a855f7' });
-        }
-      }
-      // Also deduplicate existing in case manual entry created duplicate casing
-      if (toAdd.length === 0) {
-        // check for internal duplicates to clean up
-        const seen = new Set<string>();
-        const deduped = prev.filter(c=>{
-          const low = c.name.toLowerCase();
-          if (seen.has(low)) return false;
-          seen.add(low);
-          return true;
-        });
-        if (deduped.length !== prev.length) return deduped;
-        return prev;
-      }
-      return [...prev, ...toAdd];
-    });
-  }, []);
+  const [categories, setCategories] = React.useState<Category[]>(()=> { try{ const s=localStorage.getItem('fam-cats'); return s?JSON.parse(s):INITIAL_CATEGORIES; } catch{ return INITIAL_CATEGORIES; } });
   const [tab, setTab] = React.useState<'overview'|'accounts'|'bills'|'transactions'|'categories'>('overview');
   const [search, setSearch] = React.useState(''); const [filterCat, setFilterCat] = React.useState('All'); const [filterYear, setFilterYear] = React.useState(String(new Date().getFullYear())); const [filterMonthOnly, setFilterMonthOnly] = React.useState(String(new Date().getMonth()+1).padStart(2,'0')); // default to current month, auto-updates
   const [showAddTx, setShowAddTx] = React.useState(false);
@@ -409,85 +354,7 @@ export default function App(){
   React.useEffect(()=>{ localStorage.setItem('fam-cats', JSON.stringify(categories)); }, [categories]);
   React.useEffect(()=>{ if(lastImport) localStorage.setItem('fam-last-import', lastImport); }, [lastImport]);
 
-    // --- BUDGET ALERT SYSTEM (IN-APP ONLY) ---
-  const [dismissedAlerts, setDismissedAlerts] = React.useState<Record<string, boolean>>(()=> {
-    try { return JSON.parse(localStorage.getItem('fam-budget-dismissed')||'{}'); } catch { return {}; }
-  });
-
-  React.useEffect(()=>{ localStorage.setItem('fam-budget-dismissed', JSON.stringify(dismissedAlerts)); }, [dismissedAlerts]);
-
-  type OverBudgetAlert = { monthKey: string; monthLabel: string; category: string; spent: number; limit: number; overBy: number; pctOver: number; txnCount: number; };
-
-  const overBudgetAlerts = React.useMemo((): OverBudgetAlert[] => {
-    const monthCategoryTotals: Record<string, Record<string, number>> = {};
-    const monthCategoryCounts: Record<string, Record<string, number>> = {};
-    transactions.forEach(t=>{
-      if (t.type !== 'expense') return;
-      if (!(t.category in BUDGET_LIMITS)) return;
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(t.date)) return;
-      const monthKey = t.date.slice(0,7);
-      if (!monthCategoryTotals[monthKey]) {
-        monthCategoryTotals[monthKey] = {};
-        monthCategoryCounts[monthKey] = {};
-      }
-      if (!monthCategoryTotals[monthKey][t.category]) {
-        monthCategoryTotals[monthKey][t.category] = 0;
-        monthCategoryCounts[monthKey][t.category] = 0;
-      }
-      monthCategoryTotals[monthKey][t.category] += Math.abs(t.amount);
-      monthCategoryCounts[monthKey][t.category] += 1;
-    });
-    const alerts: OverBudgetAlert[] = [];
-    for (const [monthKey, catMap] of Object.entries(monthCategoryTotals)) {
-      for (const [category, total] of Object.entries(catMap)) {
-        const limit = BUDGET_LIMITS[category];
-        if (!limit) continue;
-        if (total > limit) {
-          const parts = monthKey.split('-');
-          const monthLabel = new Date(parseInt(parts[0]), parseInt(parts[1])-1, 1).toLocaleDateString('en-US',{month:'long', year:'numeric'});
-          const alertKey = monthKey + '-' + category;
-          if (dismissedAlerts[alertKey]) continue;
-          alerts.push({
-            monthKey,
-            monthLabel,
-            category,
-            spent: total,
-            limit,
-            overBy: total - limit,
-            pctOver: Math.round(((total/limit)-1)*100),
-            txnCount: monthCategoryCounts[monthKey][category]
-          });
-        }
-      }
-    }
-    return alerts.sort((a,b)=> {
-      if (a.monthKey !== b.monthKey) return b.monthKey.localeCompare(a.monthKey);
-      return b.overBy - a.overBy;
-    });
-  }, [transactions, dismissedAlerts]);
-
-  const currentMonthKey = new Date().getFullYear() + '-' + String(new Date().getMonth()+1).padStart(2,'0');
-  const currentMonthAlerts = overBudgetAlerts.filter(a=> a.monthKey === currentMonthKey);
-  const pastMonthAlerts = overBudgetAlerts.filter(a=> a.monthKey !== currentMonthKey);
-
-  const dismissAlert = (alert: OverBudgetAlert) => {
-    const key = alert.monthKey + '-' + alert.category;
-    setDismissedAlerts(prev=> {
-      const next = {...prev, [key]: true};
-      return next;
-    });
-  };
-
-  const resetDismissedAlerts = () => {
-    if (!confirm('Reset all dismissed budget alerts?')) return;
-    setDismissedAlerts({});
-    try { localStorage.removeItem('fam-budget-dismissed'); } catch {}
-  };
-  // --- END BUDGET ALERT SYSTEM ---
-
   const recalcMonthly = (allTx: Transaction[]) => {
-
-
     const monthMap = new Map<string, { income: number; expense: number }>();
     allTx.forEach(t=>{
       if (t.category === 'Transfers') return;
@@ -770,60 +637,6 @@ export default function App(){
       <main className="max-w-[1440px] mx-auto px-4 md:px-8 py-6">
         {tab==='overview' && (
           <div className="space-y-6">
-            {/* BUDGET ALERTS BANNER */}
-            {overBudgetAlerts.length > 0 && (
-              <div className="space-y-3">
-                {currentMonthAlerts.length > 0 && (
-                  <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
-                    <div className="flex justify-between items-start gap-3">
-                      <div className="flex gap-3 flex-1">
-                        <div className="w-9 h-9 rounded-xl bg-red-600 text-white grid place-items-center font-bold text-sm shrink-0">!</div>
-                        <div className="flex-1">
-                          <h3 className="font-bold text-[13px] text-red-900">Over Budget This Month — {new Date().toLocaleDateString('en-US',{month:'long', year:'numeric'})}</h3>
-                          <div className="mt-2 grid gap-2">
-                            {currentMonthAlerts.map(a=> (
-                              <div key={a.monthKey+'-'+a.category} className="flex items-center justify-between gap-3 rounded-xl bg-white border border-red-100 px-3 py-2.5">
-                                <div className="flex-1">
-                                  <div className="flex items-center gap-2 flex-wrap">
-                                    <span className="font-semibold text-[12px]">{a.category}</span>
-                                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">{a.pctOver}% over</span>
-                                    <span className="text-[10px] text-slate-500">{a.txnCount} txns</span>
-                                  </div>
-                                  <div className="text-[11px] text-slate-600 mt-0.5">Spent {fmt(a.spent)} / Budget {fmt(a.limit)} • Over by {fmt(a.overBy)}</div>
-                                  <div className="mt-1.5 w-full h-1.5 rounded-full bg-slate-100 overflow-hidden">
-                                    <div className="h-full bg-red-500 rounded-full" style={{width: (Math.min(100, (a.spent/a.limit)*100)) + '%'}}></div>
-                                  </div>
-                                </div>
-                                <button onClick={()=> dismissAlert(a)} className="text-[11px] px-2.5 py-1 rounded-full bg-white border hover:bg-slate-50 shrink-0">Dismiss</button>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                      <button onClick={resetDismissedAlerts} className="text-[10px] text-red-700 underline shrink-0">Reset</button>
-                    </div>
-                  </div>
-                )}
-                {pastMonthAlerts.length > 0 && (
-                  <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
-                    <h3 className="font-semibold text-[12px] text-amber-900 mb-2">Past Months Over Budget ({pastMonthAlerts.length})</h3>
-                    <div className="grid md:grid-cols-2 gap-2">
-                      {pastMonthAlerts.map(a=> (
-                        <div key={a.monthKey+'-'+a.category} className="flex items-center justify-between gap-2 rounded-xl bg-white border border-amber-100 px-3 py-2">
-                          <div>
-                            <div className="font-medium text-[11px]">{a.monthLabel} • {a.category}</div>
-                            <div className="text-[10px] text-slate-500">{fmt(a.spent)} / {fmt(a.limit)} (+{fmt(a.overBy)})</div>
-                          </div>
-                          <button onClick={()=> dismissAlert(a)} className="text-[10px] px-2 py-1 rounded-full bg-white border shrink-0">Dismiss</button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-            {/* END BUDGET ALERTS BANNER */}
-
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               <div className="rounded-2xl bg-white border p-5"><p className="text-[11px] uppercase text-slate-500">Net Worth</p><p className="text-2xl font-bold mt-1">{fmt(netWorth)}</p></div>
               <div className="rounded-2xl bg-white border p-5"><p className="text-[11px] uppercase text-slate-500">True Liquid</p><p className="text-2xl font-bold mt-1">{fmt(trueLiquidCash)}</p></div>
@@ -887,7 +700,6 @@ export default function App(){
               <div className="h-[220px]"><ResponsiveContainer width="100%" height="100%"><BarChart data={monthly}><CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false}/><XAxis dataKey="month" tick={{fontSize:11}}/><YAxis tick={{fontSize:11}} tickFormatter={v=>`$${(v/1000).toFixed(0)}k`}/><Tooltip formatter={(v:any)=>fmt(v as number)}/><Bar dataKey="income" fill="#0f172a" radius={[6,6,0,0]}/><Bar dataKey="expense" fill="#ef4444" radius={[6,6,0,0]}/></BarChart></ResponsiveContainer></div>
               <div className="mt-4 overflow-x-auto"><table className="w-full text-[12px]"><thead><tr className="text-slate-500 bg-slate-50/80"><th className="text-left font-medium px-4 py-2">Month</th><th className="text-right font-medium px-3 py-2">Income</th><th className="text-right font-medium px-3 py-2">Expenses</th><th className="text-right font-medium px-3 py-2">Net</th></tr></thead><tbody>{monthly.map(m=> <tr key={m.month} className="border-t"><td className="px-4 py-2 font-medium">{m.month}</td><td className="px-3 py-2 text-right">{fmt(m.income)}</td><td className="px-3 py-2 text-right text-red-600">{fmt(m.expense)}</td><td className={`px-3 py-2 text-right font-semibold ${m.net<0?'text-red-600':'text-emerald-600'}`}>{fmt(m.net)}</td></tr>)}<tr className="border-t-2 border-slate-900 font-bold bg-slate-50"><td className="px-4 py-2">YTD</td><td className="px-3 py-2 text-right">{fmt(monthly.reduce((s,m)=>s+m.income,0))}</td><td className="px-3 py-2 text-right">{fmt(monthly.reduce((s,m)=>s+m.expense,0))}</td><td className="px-3 py-2 text-right">{fmt(ytdNet)}</td></tr></tbody></table></div>
             </div>
-          </div>
           </div>
         )}
         {tab==='accounts' && (
@@ -1037,6 +849,7 @@ export default function App(){
     </PasswordGate>
   );
 }
+
 
 
 
