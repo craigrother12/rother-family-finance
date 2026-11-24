@@ -621,6 +621,29 @@ export default function App(){
     return { items, total };
   }, [filteredTransactions, categories]);
 
+  const [overviewCat, setOverviewCat] = React.useState<string>('All');
+
+  const overviewBaseExpenses = React.useMemo(() => {
+    return filteredTransactions.filter(
+      t => t.amount < 0 && t.category !== 'Transfers' && t.category !== 'Income'
+    );
+  }, [filteredTransactions]);
+
+  const overviewFilteredExpenses = React.useMemo(() => {
+    if (overviewCat === 'All') return overviewBaseExpenses;
+    return overviewBaseExpenses.filter(t => t.category === overviewCat);
+  }, [overviewBaseExpenses, overviewCat]);
+
+  const overviewDisplayedBreakdown = React.useMemo(() => {
+    if (overviewCat === 'All') return categoryBreakdown;
+    const total = overviewFilteredExpenses.reduce((sum, t) => sum + Math.abs(t.amount), 0);
+    const cat = categories.find(c => c.name === overviewCat);
+    const items = total > 0
+      ? [{ name: overviewCat, value: total, color: cat?.color || '#94a3b8' }]
+      : [];
+    return { items, total };
+  }, [overviewCat, categoryBreakdown, overviewFilteredExpenses, categories]);
+
   const filteredTotal = React.useMemo(()=> {
     const relevant = filteredTransactions.filter(t=> t.category!=='Transfers');
     return relevant.reduce((s,t)=> s + t.amount, 0);
@@ -646,7 +669,8 @@ export default function App(){
         const reader = new FileReader();
         reader.onload = e => {
           const text = e.target?.result as string;
-          const rawLines = text.split(/?
+          const rawLines = text.split(/
+?
 /).filter(l=> l.trim().length>0);
           if (rawLines.length < 2) { resolve([]); return; }
           const headerCols = splitCsvRow(rawLines[0]).map(h=> h.trim().toLowerCase());
@@ -1021,36 +1045,97 @@ export default function App(){
             </div>
             <div className="grid lg:grid-cols-1 gap-6">
               <div className="rounded-2xl bg-white border p-5">
-                <div className="flex justify-between items-start gap-2 flex-wrap mb-1">
-                  <h3 className="font-semibold text-[13px]">Spending by Category — {filterMonth || 'All Time'}</h3>
-                  <span className="text-[11px] text-slate-500">Synced with Transactions filter</span>
-                </div>
-                <p className="text-[11px] text-slate-500 mb-4">Excludes Income & Transfers • {filteredTransactions.filter(t=>t.amount<0 && t.category!=='Transfers' && t.category!=='Income').length} expenses</p>
-                <div className="h-[280px]">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={categoryBreakdown.items}
-                        cx="50%" cy="50%" innerRadius={55} outerRadius={95} dataKey="value" nameKey="name" paddingAngle={2}
+                <div className="flex justify-between items-start gap-3 flex-wrap mb-1">
+                  <div>
+                    <h3 className="font-semibold text-[13px]">
+                      Spending by Category — {overviewCat === 'All' ? 'All Categories' : overviewCat} ({filterMonth || 'All Time'})
+                    </h3>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      Excludes Income & Transfers • {overviewFilteredExpenses.length} expenses • Total {fmt(overviewDisplayedBreakdown.total)}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <select
+                      aria-label="Filter spending by category"
+                      value={overviewCat}
+                      onChange={e => setOverviewCat(e.target.value)}
+                      className="px-3 py-1.5 rounded-xl border text-xs bg-white font-medium text-slate-800"
+                    >
+                      <option value="All">All Spending Categories</option>
+                      {categories
+                        .filter(c => !['Income', 'Transfers'].includes(c.name))
+                        .map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+                    </select>
+                    {overviewCat !== 'All' && (
+                      <button
+                        onClick={() => setOverviewCat('All')}
+                        className="px-2.5 py-1.5 rounded-xl bg-slate-100 text-slate-700 text-xs hover:bg-slate-200"
                       >
-                        {categoryBreakdown.items.map((item) => <Cell key={item.name} fill={item.color} />)}
-                      </Pie>
-                      <Tooltip formatter={(v:any)=> fmt(v as number)} />
-                      <Legend />
-                    </PieChart>
-                  </ResponsiveContainer>
+                        Reset
+                      </button>
+                    )}
+                    <span className="text-[11px] text-slate-500">Synced with Transactions period</span>
+                  </div>
+                </div>
+                <div className="h-[280px] mt-3">
+                  {overviewDisplayedBreakdown.items.length > 0 ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={overviewDisplayedBreakdown.items}
+                          cx="50%" cy="50%" innerRadius={55} outerRadius={95} dataKey="value" nameKey="name" paddingAngle={2}
+                        >
+                          {overviewDisplayedBreakdown.items.map((item) => <Cell key={item.name} fill={item.color} />)}
+                        </Pie>
+                        <Tooltip formatter={(v:any)=> fmt(v as number)} />
+                        <Legend />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="h-full rounded-xl border border-dashed bg-slate-50 grid place-items-center text-xs text-slate-500 px-4 text-center">
+                      No spending recorded for {overviewCat} in {filterMonth || 'All Time'}.
+                    </div>
+                  )}
                 </div>
                 <div className="mt-3 space-y-1 max-h-[140px] overflow-auto">
-                  {categoryBreakdown.items.map(({ name, value, color }) => (
+                  {overviewDisplayedBreakdown.items.map(({ name, value, color }) => (
                     <div key={name} className="flex justify-between text-[11px]">
                       <div className="flex items-center gap-2">
                         <div className="w-2.5 h-2.5 rounded-full" style={{background: color}}/>
                         <span>{name}</span>
                       </div>
-                      <span className="font-medium">{fmt(value)} ({categoryBreakdown.total>0? Math.round(value/categoryBreakdown.total*100):0}%)</span>
+                      <span className="font-medium">
+                        {fmt(value)} ({categoryBreakdown.total>0? Math.round(value/categoryBreakdown.total*100):0}% of period spend)
+                      </span>
                     </div>
                   ))}
                 </div>
+                {overviewCat !== 'All' && overviewFilteredExpenses.length > 0 && (
+                  <div className="mt-4 pt-3 border-t">
+                    <div className="flex justify-between items-center mb-2">
+                      <span className="text-[11px] font-semibold text-slate-700">
+                        {overviewCat} Transactions ({overviewFilteredExpenses.length})
+                      </span>
+                      <button
+                        onClick={() => { setFilterCat(overviewCat); setTab('transactions'); }}
+                        className="text-[11px] font-medium text-slate-900 underline hover:text-slate-600"
+                      >
+                        Open in Transactions →
+                      </button>
+                    </div>
+                    <div className="max-h-[160px] overflow-auto divide-y text-[11px]">
+                      {overviewFilteredExpenses.slice(0, 12).map(tx => (
+                        <div key={tx.id} className="py-1.5 flex justify-between items-center gap-3">
+                          <div className="min-w-0">
+                            <span className="text-slate-500 mr-2">{tx.date}</span>
+                            <span className="font-medium text-slate-800 truncate">{tx.description}</span>
+                          </div>
+                          <span className="font-semibold text-red-600 shrink-0">{fmt(tx.amount)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
