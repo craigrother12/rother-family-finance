@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { createClient } from '@supabase/supabase-js';
 const SUPABASE_URL = "https://vvhjyjidbqixxsdncfjw.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ2aGp5amlkYnFpeHhzZG5jZmp3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc5Mzk1NTAsImV4cCI6MjEwMzUxNTU1MH0.jFmKLlUEvtWi2iiSjp6y0nWeufqqAHlXBczirvkDsSo";
@@ -6,14 +6,23 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const CLOUD_TABLE = 'family_finance';
 const CLOUD_ID = 'rother_main';
 
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell, LineChart, Line, Legend } from 'recharts';
-import { Upload, Wallet, Home, Plus, Search, CalendarDays } from 'lucide-react';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell, Legend } from 'recharts';
+import { Wallet, Home, Plus, Search, Cloud, CloudOff, RefreshCw, AlertTriangle, CheckCircle2, Info, Sparkles, X } from 'lucide-react';
 
 type Account = { id: string; name: string; amount: number; asOf: string; history: {date:string; amount:number}[]; type: string; isDebt?: boolean };
 type Bill = { id: string; name: string; frequency: string; amountDue: number; isPaid: boolean; dueDay?: number; dueMonth?: number };
-type MonthlyRecord = { month: string; income: number; expense: number; net: number };
+type MonthlyRecord = { month: string; key?: string; income: number; expense: number; net: number };
 type Category = { name: string; lastMonth: number; currentMonth: number; color: string };
-type Transaction = { id: string; date: string; description: string; amount: number; category: string; account: string; type: 'income'|'expense' };
+type Transaction = { id: string; date: string; description: string; amount: number; category: string; account: string; type: 'income'|'expense'; learnedRule?: boolean };
+type BannerNotice = { type: 'success' | 'error' | 'info'; message: string };
+type ConfirmDialogState = {
+  title: string;
+  body: string;
+  confirmLabel: string;
+  tone?: 'danger' | 'primary';
+  requireDoubleConfirm?: boolean;
+  onConfirm: () => void;
+};
 
 const nowStr = () => new Date().toLocaleString('en-US', { month: 'numeric', day: 'numeric', year: '2-digit', hour: 'numeric', minute: '2-digit', hour12: true });
 
@@ -82,6 +91,7 @@ const INITIAL_CATEGORIES: Category[] = [
   { name: 'Income', lastMonth: 0, currentMonth: 0, color: '#059669' },
 ];
 const FREQUENCIES = ['1st','8th','15th','16th','18th','24th','Monthly','Quarterly','Bi-Yearly','Yearly','Rarely'];
+const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
 function splitCsvRow(row: string): string[] {
   const result: string[] = []; let cur=''; let inQuotes=false;
@@ -96,79 +106,83 @@ function parseDateToISO(raw: string): string {
 }
 function parseAmount(raw: string): number { if(!raw) return 0; const cleaned=raw.replace(/[$",]/g,'').trim(); const n=parseFloat(cleaned); return isNaN(n)?0:n; }
 
-function getCleanCategory(description: string, rawCategory: string, amount: number): string {
+function matchLearnedCategory(description: string, learnedMap: Record<string, string>): string | null {
+  const key = (description || '').toUpperCase().trim();
+  if (!key) return null;
+  if (learnedMap[key]) return learnedMap[key];
+  const baseKey = key.replace(/#\d+/g, '').replace(/\s+\d+$/g, '').trim().replace(/\s+/g, ' ');
+  const baseKey2 = baseKey.replace(/#.*$/, '').trim();
+  if (learnedMap[baseKey]) return learnedMap[baseKey];
+  if (learnedMap[baseKey2]) return learnedMap[baseKey2];
+  const merchant = baseKey2.split(' ')[0];
+  if (merchant.length > 3) {
+    for (const [k, v] of Object.entries(learnedMap)) {
+      if (k.startsWith(merchant)) return v;
+    }
+  }
+  return null;
+}
+
+function getCleanCategory(description: string, rawCategory: string, amount: number, learnedMap?: Record<string, string>): { category: string; fromLearned: boolean } {
   const d = (description||'').toLowerCase();
   const r = (rawCategory||'').toLowerCase();
-  // LEARNED override - checks if user previously re-categorized this merchant
   try {
-    const learnedMap = JSON.parse(localStorage.getItem('fam-learned')||'{}');
-    const key = (description||'').toUpperCase().trim();
-    if (learnedMap[key]) return learnedMap[key];
-    const baseKey = key.replace(/#\d+/g,'').replace(/\s+\d+$/g,'').trim().replace(/\s+/g,' ');
-    const baseKey2 = baseKey.replace(/#.*$/,'').trim();
-    if (learnedMap[baseKey]) return learnedMap[baseKey];
-    if (learnedMap[baseKey2]) return learnedMap[baseKey2];
-    // also check description without store numbers: KROGER #423 -> KROGER
-    const merchant = baseKey2.split(' ')[0];
-    if (merchant.length>3) {
-      for (const [k,v] of Object.entries(learnedMap)) {
-        if (k.startsWith(merchant)) return v as string;
-      }
-    }
+    const map = learnedMap ?? JSON.parse(localStorage.getItem('fam-learned')||'{}');
+    const matched = matchLearnedCategory(description, map);
+    if (matched) return { category: matched, fromLearned: true };
   } catch {}
-
 
   const isIncome = amount > 0;
   if (isIncome) {
     if (d.includes('autopay pymt') || d.includes('autopay pyment') || d.includes('automatic payment') || d.includes('payment - thank') || d.includes('payment thank') || (d.includes('capital one') && (d.includes('pymt') || d.includes('autopay'))) || (d.includes('chase') && d.includes('autopay')) || d.includes('crcardpmt')) {
-      return 'Transfers';
+      return { category: 'Transfers', fromLearned: false };
     }
     if (d.includes('venmo cashout') || (d.includes('venmo') && d.includes('cashout'))) {
-      return 'Income';
+      return { category: 'Income', fromLearned: false };
     }
     if (d.includes('payroll') || d.includes('hy-tek') || d.includes('nitto denko') || d.includes('salary') || d.includes('paycheck') || d.includes('interest paid') || (d.includes('irs') && d.includes('tax ref')) || d.includes('tax refund') || (d.includes('echeck deposit') && amount>100) || d.includes('avec payroll')) {
-      return 'Income';
+      return { category: 'Income', fromLearned: false };
     }
     if (d.includes('internet transfer from savings') || d.includes('transfer from savings') || (d.includes('transfer from') && d.includes('savings'))) {
-      return 'Transfers';
+      return { category: 'Transfers', fromLearned: false };
     }
-    return 'Income';
+    return { category: 'Income', fromLearned: false };
   }
   if (d.includes('craig rother ck transfer') || (d.includes('craig') && d.includes('rother') && d.includes('transfer'))) {
-    return 'Auto Loans';
+    return { category: 'Auto Loans', fromLearned: false };
   }
   if (d.includes('crcardpmt') || (d.includes('crcard') && d.includes('pmt')) || d.includes('capital one crcardpmt') || (d.includes('capital one cr') && d.includes('pmt')) || d.includes('capital one autopay') || d.includes('chase credit crd autopay') || d.includes('credit crd autopay') || (d.includes('autopay') && d.includes('credit')) || d.includes('internet transfer to savings') || d.includes('transfer to savings') || d.includes('surprise savings booster') || (d.includes('internet transfer') && d.includes('savings')) || (d.includes('savings account') && d.includes('transfer'))) {
-    if (d.includes('joe coffee')) return 'Dining';
-    return 'Transfers';
+    if (d.includes('joe coffee')) return { category: 'Dining', fromLearned: false };
+    return { category: 'Transfers', fromLearned: false };
   }
   if (d.includes('newrez') || d.includes('shellpoin') || d.includes('newrez-shellpoin') || d.includes('home loan') || (d.includes('mortgage') &&!d.includes('georgia school'))) {
-    return 'Housing';
+    return { category: 'Housing', fromLearned: false };
   }
   if (d.includes('honda pmt') || d.includes('honda financial') || d.includes('hyundai') || d.includes('toyota financial') || (d.includes('honda') && d.includes('8005'))) {
-    return 'Auto Loans';
+    return { category: 'Auto Loans', fromLearned: false };
   }
   if (d.includes('kroger') || d.includes('fresh thyme') || d.includes('trader joe') || d.includes('wholefds') || d.includes('whole foods') || d.includes('grocery')) {
-    return 'Groceries';
+    return { category: 'Groceries', fromLearned: false };
   }
   if (d.includes('sq *') || d.includes('tst*') || d.includes('coffee') || d.includes('starbucks') || d.includes('carabello') || d.includes('fort thomas coffee') || d.includes('governor') || d.includes('proud hound') || d.includes('chick-fil-a') || d.includes('chick fil a') || d.includes('joe coffee') || r==='dining') {
-    return 'Dining';
+    return { category: 'Dining', fromLearned: false };
   }
-  if (d.includes('amazon') || d.includes('amzn')) return 'Amazon';
+  if (d.includes('amazon') || d.includes('amzn')) return { category: 'Amazon', fromLearned: false };
   if (!d.includes('shellpoin') &&!d.includes('newrez') && (d.includes('sunoco') || (d.includes('shell') &&!d.includes('shellpoin')) || d.includes(' bp ') || d.startsWith('bp ') || d.startsWith('bp#') || d.includes('bp#') || d.includes('chevron') || d.includes('marathon') || d.includes('speedway') || d.includes('exxon') || d.includes('circle k') || d.includes('circlek') || r==='gas')) {
-    return 'Gas';
+    return { category: 'Gas', fromLearned: false };
   }
-  if (d.includes('dukeenergy') || d.includes('duke energy') || (d.includes('duke') && d.includes('bill pay'))) return 'Utilities';
-  if (d.includes('sanitation distr') || d.includes('northern kentuck') || d.includes('sewer') || d.includes('water bill') || d.includes('trump account') || d.includes('trump accounts')) return 'Bills & Fees';
-  if (d.includes('childcare') || d.includes('daycare') || d.includes('georgia school') || d.includes('bluebird christi')) return 'Childcare';
+  if (d.includes('dukeenergy') || d.includes('duke energy') || (d.includes('duke') && d.includes('bill pay'))) return { category: 'Utilities', fromLearned: false };
+  if (d.includes('sanitation distr') || d.includes('northern kentuck') || d.includes('sewer') || d.includes('water bill') || d.includes('trump account') || d.includes('trump accounts')) return { category: 'Bills & Fees', fromLearned: false };
+  if (d.includes('childcare') || d.includes('daycare') || d.includes('georgia school') || d.includes('bluebird christi')) return { category: 'Childcare', fromLearned: false };
   if (d.includes('venmo payment') || d.includes('venmo *add funds') || d.includes('venmo add funds') || (d.includes('add funds') && d.includes('venmo')) || (d.includes('add funds') && d.includes('7700 eastport'))) {
-    return 'Other';
+    return { category: 'Other', fromLearned: false };
   }
-  if (d.includes('venmo')) return 'Other';
-  if (d.includes('target') || d.includes('dollar tree') || d.includes('michaels') || d.includes('walmart') || d.includes('tj maxx') || r==='shopping' || (r==='merchandise' &&!d.includes('fresh thyme') &&!d.includes('kroger') &&!d.includes('trader joe')) || r==='personal') return 'Shopping';
-  if (d.includes('cvs') || d.includes('walgreens') || d.includes('pharmacy') || r.includes('health')) return 'Healthcare';
-  if (d.includes('cinema') || d.includes('movie') || d.includes('spotify') || d.includes('netflix') || d.includes('disney plus') || d.includes('spectrum') || r.includes('entertainment')) return 'Entertainment';
-  if (d.includes('check paid #') || d.includes('check paid')) return 'Other';
-  return 'Other';
+  if (d.includes('venmo')) return { category: 'Other', fromLearned: false };
+  if (d.includes('target') || d.includes('dollar tree') || d.includes('michaels') || d.includes('walmart') || d.includes('tj maxx') || r==='shopping' || (r==='merchandise' &&!d.includes('fresh thyme') &&!d.includes('kroger') &&!d.includes('trader joe')) || r==='personal') return { category: 'Shopping', fromLearned: false };
+  if (d.includes('cvs') || d.includes('walgreens') || d.includes('pharmacy') || r.includes('health')) return { category: 'Healthcare', fromLearned: false };
+  if (d.includes('cinema') || d.includes('movie') || d.includes('spotify') || d.includes('netflix') || d.includes('disney plus') || d.includes('spectrum') || r.includes('entertainment')) return { category: 'Entertainment', fromLearned: false };
+  if (d.includes('check paid #') || d.includes('check paid')) return { category: 'Other', fromLearned: false };
+  return { category: 'Other', fromLearned: false };
 }
 
 const fmt = (n: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
@@ -176,6 +190,51 @@ const monthlyFactor = (freq: string) => {
   if (freq==='Monthly' || freq.includes('1st') || freq.includes('8th') || freq.includes('15th') || freq.includes('16th') || freq.includes('18th') || freq.includes('24th')) return 1;
   if (freq==='Quarterly') return 1/3; if (freq==='Bi-Yearly') return 1/6; if (freq==='Yearly') return 1/12; return 0;
 };
+
+function isBillDueInMonth(b: Bill, targetMonth: number): { due: boolean; reason: string } {
+  const freq = b.frequency;
+  const dueMonth = b.dueMonth;
+  if (freq === 'Monthly' || ['1st','8th','15th','16th','18th','24th'].includes(freq)) {
+    return { due: true, reason: `Monthly (${freq})` };
+  }
+  if (freq === 'Yearly') {
+    if (!dueMonth) return { due: true, reason: 'Yearly (no month set — defaulted to this month)' };
+    return {
+      due: dueMonth === targetMonth,
+      reason: dueMonth === targetMonth ? `Due in ${MONTH_NAMES[targetMonth - 1]}` : `Due in ${MONTH_NAMES[dueMonth - 1]}`
+    };
+  }
+  if (freq === 'Bi-Yearly') {
+    if (!dueMonth) return { due: true, reason: 'Bi-Yearly (no month set — defaulted to this month)' };
+    const secondMonth = ((dueMonth + 5) % 12) + 1;
+    const isDue = dueMonth === targetMonth || secondMonth === targetMonth;
+    return {
+      due: isDue,
+      reason: `Due ${MONTH_NAMES[dueMonth - 1]} & ${MONTH_NAMES[secondMonth - 1]}`
+    };
+  }
+  if (freq === 'Quarterly') {
+    if (!dueMonth) return { due: true, reason: 'Quarterly (no month set — defaulted to this month)' };
+    const qMonths = [
+      dueMonth,
+      ((dueMonth + 2) % 12) + 1,
+      ((dueMonth + 5) % 12) + 1,
+      ((dueMonth + 8) % 12) + 1,
+    ];
+    return {
+      due: qMonths.includes(targetMonth),
+      reason: `Quarterly (${qMonths.map(m => MONTH_NAMES[m - 1]).join(', ')})`
+    };
+  }
+  if (freq === 'Rarely') {
+    if (!dueMonth) return { due: false, reason: 'Rarely (excluded unless Due Month is set)' };
+    return {
+      due: dueMonth === targetMonth,
+      reason: dueMonth === targetMonth ? `Due in ${MONTH_NAMES[targetMonth - 1]}` : `Scheduled ${MONTH_NAMES[dueMonth - 1]}`
+    };
+  }
+  return { due: false, reason: 'Excluded' };
+}
 
 
 // --- PASSWORD GATE ---
@@ -240,8 +299,8 @@ function EditableAmount({ value, onSave, isDebt }: { value: number; onSave: (v:n
   React.useEffect(()=> setTmp(String(value)), [value]);
   if (editing) return (
     <div className="flex items-center gap-1">
-      <input autoFocus type="number" value={tmp} onChange={e=>setTmp(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter'){ onSave(parseFloat(tmp)||0); setEditing(false);} if(e.key==='Escape') setEditing(false); }} className="w-[120px] px-2 py-1 rounded-lg border border-slate-900 text-sm font-semibold"/>
-      <button onClick={()=>{ onSave(parseFloat(tmp)||0); setEditing(false); }} className="px-2 py-1 rounded-lg bg-slate-900 text-white text-xs">Save</button>
+      <input autoFocus type="number" value={tmp} onChange={e=>setTmp(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter'){ onSave(Math.abs(parseFloat(tmp)||0)); setEditing(false);} if(e.key==='Escape') setEditing(false); }} className="w-[120px] px-2 py-1 rounded-lg border border-slate-900 text-sm font-semibold"/>
+      <button onClick={()=>{ onSave(Math.abs(parseFloat(tmp)||0)); setEditing(false); }} className="px-2 py-1 rounded-lg bg-slate-900 text-white text-xs">Save</button>
     </div>
   );
   return <button onClick={()=>setEditing(true)} className={`text-right font-bold text-[13px] px-2.5 py-1 rounded-lg border ${isDebt?'bg-red-50 border-red-100 text-red-700':'bg-white border-slate-200 hover:bg-slate-50'}`}>{fmt(value)}</button>;
@@ -259,24 +318,85 @@ export default function App(){
   const isInitialCloudLoad = React.useRef(true);
   const isApplyingRemote = React.useRef(false);
   const lastPushTime = React.useRef(0);
-  const isDuplicate = React.useCallback((newTxn: Transaction, existing: Transaction[])=> existing.some(t=> t.date===newTxn.date && t.amount===newTxn.amount && t.name.trim().toLowerCase()===newTxn.name.trim().toLowerCase() && (t.account||'')===(newTxn.account||'')), []);
-  const exportBackup = ()=> { try { const data = { liquid, illiquid, bills, monthly, transactions, categories, learned, netWorthHistory, lastImport, exportedAt: new Date().toISOString(), version: 3 }; const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'}); const url = URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=`rother-finance-backup-${new Date().toISOString().slice(0,10)}.json`; a.click(); URL.revokeObjectURL(url); } catch(e){ alert('Export failed: '+e); } };
-  const importBackup = (file: File)=> { const reader = new FileReader(); reader.onload = (e)=> { try { const data = JSON.parse(e.target?.result as string); if (!confirm(`Restore backup from ${data.exportedAt||'unknown'}? ${data.transactions?.length||0} transactions.`)) return; if (data.liquid) setLiquid(data.liquid); if (data.illiquid) setIlliquid(data.illiquid); if (data.bills) setBills(data.bills); if (data.transactions) setTransactions(data.transactions); if (data.categories) setCategories(data.categories); if (data.learned) setLearned(data.learned); if (data.netWorthHistory) setNetWorthHistory(data.netWorthHistory); if ((data as any).lastImport) setLastImport((data as any).lastImport); } catch(err){ alert('Invalid backup: '+err); } }; reader.readAsText(file); };
+
+  const [banner, setBanner] = React.useState<BannerNotice | null>(null);
+  const [confirmDialog, setConfirmDialog] = React.useState<ConfirmDialogState | null>(null);
+  const [confirmStepTwo, setConfirmStepTwo] = React.useState(false);
+  const [pendingRestore, setPendingRestore] = React.useState<any | null>(null);
+
+  const showNotice = React.useCallback((type: 'success' | 'error' | 'info', message: string) => {
+    setBanner({ type, message });
+  }, []);
+
+  React.useEffect(() => {
+    if (!banner) return;
+    const timer = setTimeout(() => setBanner(null), 5000);
+    return () => clearTimeout(timer);
+  }, [banner]);
+
+  const exportBackup = ()=> {
+    try {
+      const data = { liquid, illiquid, bills, monthly, transactions, categories, learned, netWorthHistory, lastImport, exportedAt: new Date().toISOString(), version: 3 };
+      const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
+      const url = URL.createObjectURL(blob);
+      const a=document.createElement('a');
+      a.href=url;
+      a.download=`rother-finance-backup-${new Date().toISOString().slice(0,10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showNotice('success', 'Backup JSON downloaded.');
+    } catch(e){
+      showNotice('error', `Export failed: ${e}`);
+    }
+  };
+
+  const importBackup = (file: File)=> {
+    const reader = new FileReader();
+    reader.onload = (e)=> {
+      try {
+        const data = JSON.parse(e.target?.result as string);
+        setPendingRestore(data);
+      } catch(err){
+        showNotice('error', `Invalid backup file: ${err}`);
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const applyPendingRestore = () => {
+    if (!pendingRestore) return;
+    const data = pendingRestore;
+    if (data.liquid) setLiquid(data.liquid);
+    if (data.illiquid) setIlliquid(data.illiquid);
+    if (data.bills) setBills(data.bills);
+    if (data.transactions) setTransactions(data.transactions);
+    if (data.categories) setCategories(data.categories);
+    if (data.learned) setLearned(data.learned);
+    if (data.netWorthHistory) setNetWorthHistory(data.netWorthHistory);
+    if (data.lastImport) setLastImport(data.lastImport);
+    setPendingRestore(null);
+    showNotice('success', `Restored ${data.transactions?.length || 0} transactions from backup.`);
+  };
 
   const [transactions, setTransactions] = React.useState<Transaction[]>(()=> { try{ const s=localStorage.getItem('fam-trans'); return s?JSON.parse(s):[]; } catch{ return []; } });
   const [categories, setCategories] = React.useState<Category[]>(()=> { try{ const s=localStorage.getItem('fam-cats'); return s?JSON.parse(s):INITIAL_CATEGORIES; } catch{ return INITIAL_CATEGORIES; } });
   const [tab, setTab] = React.useState<'overview'|'accounts'|'bills'|'transactions'|'categories'>('overview');
-  const [search, setSearch] = React.useState(''); const [filterCat, setFilterCat] = React.useState('All'); const [filterYear, setFilterYear] = React.useState(String(new Date().getFullYear())); const [filterMonthOnly, setFilterMonthOnly] = React.useState(String(new Date().getMonth()+1).padStart(2,'0')); // default to current month, auto-updates
+  const [search, setSearch] = React.useState('');
+  const [filterCat, setFilterCat] = React.useState('All');
+  const [filterYear, setFilterYear] = React.useState(String(new Date().getFullYear()));
+  const [filterMonthOnly, setFilterMonthOnly] = React.useState(String(new Date().getMonth()+1).padStart(2,'0'));
   const [showAddTx, setShowAddTx] = React.useState(false);
   const [newTx, setNewTx] = React.useState<{date:string, description:string, amount:string, category:string, type:'income'|'expense'}>({date: new Date().toISOString().slice(0,10), description:'', amount:'', category:'Other', type:'expense'});
+  const [addTxError, setAddTxError] = React.useState('');
+  const [highlightedTxId, setHighlightedTxId] = React.useState<string | null>(null);
   const filterMonth = filterYear === 'All' ? '' : filterMonthOnly === 'All' ? filterYear : `${filterYear}-${filterMonthOnly}`;
   const [csvPreview, setCsvPreview] = React.useState<Transaction[]|null>(null);
-  const [newCatName, setNewCatName] = React.useState(''); const [newCatColor, setNewCatColor] = React.useState('#10b981');
+  const [newCatName, setNewCatName] = React.useState('');
+  const [newCatColor, setNewCatColor] = React.useState('#10b981');
   const [learned, setLearned] = React.useState<Record<string,string>>(()=> {
     try { return JSON.parse(localStorage.getItem('fam-learned')||'{}'); } catch { return {}; }
   });
   React.useEffect(()=>{ localStorage.setItem('fam-learned', JSON.stringify(learned)); }, [learned]);
-
 
   React.useEffect(()=>{ localStorage.setItem('fam-nw-history', JSON.stringify(netWorthHistory)); }, [netWorthHistory]);
   React.useEffect(()=>{ if (netWorthHistory.length===0 && (liquid.length>0 || illiquid.length>0)) { const totalLiquidAssets = liquid.filter(a=>!a.isDebt).reduce((s,a)=>s+a.amount,0); const totalLiquidDebt = liquid.filter(a=>a.isDebt).reduce((s,a)=>s+a.amount,0); const netLiquid = totalLiquidAssets - totalLiquidDebt; const totalIlliquidAssets = illiquid.filter(a=>!a.isDebt).reduce((s,a)=>s+a.amount,0); const totalIlliquidDebt = illiquid.filter(a=>a.isDebt).reduce((s,a)=>s+a.amount,0); const netIlliquid = totalIlliquidAssets - totalIlliquidDebt; const nw = netLiquid + netIlliquid; if (nw>0) { setNetWorthHistory([{date: new Date().toISOString().slice(0,10), timestamp: Date.now(), netWorth: nw, liquid: netLiquid, illiquid: netIlliquid}]); } } }, []);
@@ -297,7 +417,7 @@ export default function App(){
           if (d.learned) setLearned(d.learned); 
           if (d.netWorthHistory) setNetWorthHistory(d.netWorthHistory);
           if ((d as any).lastImport) setLastImport((d as any).lastImport);
-          setLastSync(new Date(data.updated_at).toLocaleTimeString()); 
+          setLastSync(new Date(data.updated_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })); 
           setTimeout(()=> { isApplyingRemote.current = false; }, 2000);
         } 
         setCloudStatus('synced'); 
@@ -320,7 +440,7 @@ export default function App(){
         if (d.learned) setLearned(d.learned); 
         if (d.netWorthHistory) setNetWorthHistory(d.netWorthHistory);
         if ((d as any).lastImport) setLastImport((d as any).lastImport); 
-        setLastSync(new Date().toLocaleTimeString()); 
+        setLastSync(new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })); 
         setCloudStatus('synced'); 
         setTimeout(()=> { isApplyingRemote.current = false; }, 2000); 
       } catch(e){ console.error('realtime error', e); } 
@@ -339,12 +459,11 @@ export default function App(){
         if(error) throw error; 
         lastPushTime.current = now; 
         setCloudStatus('synced'); 
-        setLastSync(new Date().toLocaleTimeString()); 
+        setLastSync(new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })); 
       } catch(e){ console.error(e); setCloudStatus('error'); } 
     }, 2000); 
     return ()=> clearTimeout(t); 
   }, [liquid, illiquid, bills, transactions, categories, learned, netWorthHistory, lastImport]);
-
 
   React.useEffect(()=>{ localStorage.setItem('fam-liquid', JSON.stringify(liquid)); }, [liquid]);
   React.useEffect(()=>{ localStorage.setItem('fam-illiquid', JSON.stringify(illiquid)); }, [illiquid]);
@@ -354,7 +473,16 @@ export default function App(){
   React.useEffect(()=>{ localStorage.setItem('fam-cats', JSON.stringify(categories)); }, [categories]);
   React.useEffect(()=>{ if(lastImport) localStorage.setItem('fam-last-import', lastImport); }, [lastImport]);
 
-  const recalcMonthly = (allTx: Transaction[]) => {
+  const activeOverviewYear = React.useMemo(() => {
+    const nowYear = new Date().getFullYear();
+    if (filterYear !== 'All') {
+      const parsed = parseInt(filterYear, 10);
+      if (!isNaN(parsed)) return parsed;
+    }
+    return nowYear;
+  }, [filterYear]);
+
+  const recalcMonthly = React.useCallback((allTx: Transaction[], targetYear: number) => {
     const monthMap = new Map<string, { income: number; expense: number }>();
     allTx.forEach(t=>{
       if (t.category === 'Transfers') return;
@@ -364,12 +492,14 @@ export default function App(){
       if (t.type==='income') cur.income += Math.abs(t.amount); else cur.expense += Math.abs(t.amount);
       monthMap.set(mKey, cur);
     });
-    // ALWAYS show current year only - auto-rolls every Jan 1st
     const now = new Date();
-    const targetYear = now.getFullYear();
-    const currentMonthInYear = now.getMonth()+1;
-    const maxMonthWithData = Array.from(monthMap.keys()).filter(k=>k.startsWith(String(targetYear)+'-')).map(k=> parseInt(k.slice(5,7))).reduce((a,b)=> Math.max(a,b), 0);
-    const endMonth = Math.max(currentMonthInYear, maxMonthWithData); // auto-populates at beginning of month
+    const isCurrentYear = targetYear === now.getFullYear();
+    const currentMonthInYear = isCurrentYear ? now.getMonth()+1 : 12;
+    const maxMonthWithData = Array.from(monthMap.keys())
+      .filter(k=>k.startsWith(String(targetYear)+'-'))
+      .map(k=> parseInt(k.slice(5,7), 10))
+      .reduce((a,b)=> Math.max(a,b), 0);
+    const endMonth = isCurrentYear ? Math.max(currentMonthInYear, maxMonthWithData) : Math.max(12, maxMonthWithData);
     const months: {key:string, label:string}[] = [];
     for (let m=1; m<=endMonth; m++) {
       const key = `${targetYear}-${String(m).padStart(2,'0')}`;
@@ -380,17 +510,16 @@ export default function App(){
       const v = monthMap.get(key) || {income:0, expense:0};
       return { month: label, key, income: Math.round(v.income*100)/100, expense: Math.round(v.expense*100)/100, net: Math.round((v.income - v.expense)*100)/100 };
     });
-    setMonthly(newMonthly as any);
-  };
+    setMonthly(newMonthly);
+  }, []);
 
-  React.useEffect(()=>{ recalcMonthly(transactions); }, [transactions]);
+  React.useEffect(()=>{ recalcMonthly(transactions, activeOverviewYear); }, [transactions, activeOverviewYear, recalcMonthly]);
 
   const checking = React.useMemo(()=> liquid.find(a=>a.type==='checking')?.amount||0, [liquid]);
   const savings = React.useMemo(()=> liquid.find(a=>a.type==='savings')?.amount||0, [liquid]);
   const liquidDebtTotal = React.useMemo(()=> liquid.filter(a=>a.isDebt).reduce((s,a)=>s+a.amount,0), [liquid]);
   const trueLiquidCash = React.useMemo(()=> checking + savings - liquidDebtTotal, [checking, savings, liquidDebtTotal]);
   
-  // Net worth history - log every time accounts change
   const logNetWorth = React.useCallback((liq: Account[], ill: Account[]) => {
     const liqAssets = liq.filter(a=>!a.isDebt).reduce((s,a)=>s+a.amount,0);
     const liqDebt = liq.filter(a=>a.isDebt).reduce((s,a)=>s+a.amount,0);
@@ -399,14 +528,12 @@ export default function App(){
     const nw = (liqAssets - liqDebt) + (illAssets - illDebt);
     const now = new Date();
     setNetWorthHistory(prev=>{
-      // Don't duplicate if same net worth within 5 minutes
       const last = prev[prev.length-1];
       if (last && Math.abs(last.netWorth - nw) < 0.01 && (Date.now() - last.timestamp) < 300000) return prev;
-      return [...prev, { date: now.toISOString().slice(0,10), timestamp: now.getTime(), netWorth: nw, liquid: liqAssets - liqDebt, illiquid: illAssets - illDebt }].slice(-100); // keep last 100
+      return [...prev, { date: now.toISOString().slice(0,10), timestamp: now.getTime(), netWorth: nw, liquid: liqAssets - liqDebt, illiquid: illAssets - illDebt }].slice(-100);
     });
   }, []);
 
-  // Initialize history if empty
   React.useEffect(()=>{
     if (netWorthHistory.length===0) {
       logNetWorth(liquid, illiquid);
@@ -415,10 +542,10 @@ export default function App(){
 
   React.useEffect(()=>{
     if (liquid.length>0 || illiquid.length>0) {
-      // only log if history exists (not on first load)
       if (netWorthHistory.length>0) logNetWorth(liquid, illiquid);
     }
-  }, [liquid, illiquid]);
+  }, [liquid, illiquid]); // eslint-disable-line
+
   const totalIlliquidAssets = illiquid.filter(a=>!a.isDebt).reduce((s,a)=>s+a.amount,0);
   const totalIlliquidDebt = illiquid.filter(a=>a.isDebt).reduce((s,a)=>s+a.amount,0);
   const netIlliquid = totalIlliquidAssets - totalIlliquidDebt;
@@ -428,40 +555,45 @@ export default function App(){
   const netWorth = netLiquid + netIlliquid;
   const ytdNet = monthly.reduce((s,m)=>s+m.net,0);
   const currentYear = new Date().getFullYear();
-  const currentMonthRec = monthly.find(m=> (m as any).key === `${currentYear}-${String(new Date().getMonth()+1).padStart(2,'0')}`) || monthly[monthly.length-1] || { month: new Date().toLocaleDateString('en-US',{month:'short', year:'numeric'}), income:0, expense:0, net:0 } as any;
-  const monthlyBillsSum = React.useMemo(()=> {
-    const currentMonth = new Date().getMonth()+1; // 1-12, Sep = 9
-    return bills.reduce((s,b)=> {
-      if (!b.amountDue) return s;
-      const freq = b.frequency;
-      const dueMonth = b.dueMonth;
-      // Monthly and specific day bills are due every month
-      if (freq==='Monthly' || ['1st','8th','15th','16th','18th','24th'].includes(freq)) return s + b.amountDue;
-      // Yearly: due only in its dueMonth, if no dueMonth set, assume current month (so Sept shows Car Tax)
-      if (freq==='Yearly') {
-        if (!dueMonth) return s + b.amountDue; // legacy bills without month - show in current month
-        return dueMonth === currentMonth ? s + b.amountDue : s;
+  const currentMonthRec = monthly.find(m=> m.key === `${currentYear}-${String(new Date().getMonth()+1).padStart(2,'0')}`) || monthly[monthly.length-1] || { month: new Date().toLocaleDateString('en-US',{month:'short', year:'numeric'}), income:0, expense:0, net:0 };
+
+  const currentCalendarMonth = new Date().getMonth() + 1;
+  const billsSummary = React.useMemo(() => {
+    let dueThisMonthTotal = 0;
+    let paidThisMonthTotal = 0;
+    let unpaidThisMonthTotal = 0;
+    let dueThisMonthCount = 0;
+    let paidThisMonthCount = 0;
+    let unpaidThisMonthCount = 0;
+    let annualizedMonthlyAvg = 0;
+
+    bills.forEach(b => {
+      const amt = b.amountDue || 0;
+      annualizedMonthlyAvg += amt * monthlyFactor(b.frequency);
+      const { due } = isBillDueInMonth(b, currentCalendarMonth);
+      if (due) {
+        dueThisMonthTotal += amt;
+        dueThisMonthCount += 1;
+        if (b.isPaid) {
+          paidThisMonthTotal += amt;
+          paidThisMonthCount += 1;
+        } else {
+          unpaidThisMonthTotal += amt;
+          unpaidThisMonthCount += 1;
+        }
       }
-      if (freq==='Bi-Yearly') {
-        if (!dueMonth) return s + b.amountDue;
-        return (dueMonth === currentMonth || ((dueMonth+5)%12)+1 === currentMonth || ((dueMonth+6-1)%12)+1 === currentMonth) ? s + b.amountDue : s;
-        // simplified: if dueMonth is 1 and 7 etc - but for now check 6 months apart
-      }
-      if (freq==='Quarterly') {
-        if (!dueMonth) return s + b.amountDue;
-        // Quarterly: dueMonth, dueMonth+3, +6, +9
-        const months = [dueMonth, ((dueMonth+2)%12)+1, ((dueMonth+5)%12)+1, ((dueMonth+8)%12)+1];
-        // Correct quarterly: every 3 months
-        const qMonths = [dueMonth, ((dueMonth+3-1)%12)+1, ((dueMonth+6-1)%12)+1, ((dueMonth+9-1)%12)+1];
-        return qMonths.includes(currentMonth) ? s + b.amountDue : s;
-      }
-      if (freq==='Rarely') {
-        if (!dueMonth) return s; // Rarely without month = don't include unless set
-        return dueMonth === currentMonth ? s + b.amountDue : s;
-      }
-      return s;
-    }, 0);
-  }, [bills]);
+    });
+
+    return {
+      dueThisMonthTotal,
+      paidThisMonthTotal,
+      unpaidThisMonthTotal,
+      dueThisMonthCount,
+      paidThisMonthCount,
+      unpaidThisMonthCount,
+      annualizedMonthlyAvg,
+    };
+  }, [bills, currentCalendarMonth]);
 
   const filteredTransactions = React.useMemo(()=> {
     return transactions.filter(t=>{
@@ -472,8 +604,24 @@ export default function App(){
     });
   }, [transactions, search, filterCat, filterMonth]);
 
+  const categoryBreakdown = React.useMemo(() => {
+    const map = new Map<string, number>();
+    filteredTransactions
+      .filter(t => t.amount < 0 && t.category !== 'Transfers' && t.category !== 'Income')
+      .forEach(t => {
+        map.set(t.category, (map.get(t.category) || 0) + Math.abs(t.amount));
+      });
+    const total = Array.from(map.values()).reduce((a, b) => a + b, 0);
+    const items = Array.from(map.entries())
+      .map(([name, value]) => {
+        const cat = categories.find(c => c.name === name);
+        return { name, value, color: cat?.color || '#94a3b8' };
+      })
+      .sort((a, b) => b.value - a.value);
+    return { items, total };
+  }, [filteredTransactions, categories]);
+
   const filteredTotal = React.useMemo(()=> {
-    // Net of non-transfer transactions only
     const relevant = filteredTransactions.filter(t=> t.category!=='Transfers');
     return relevant.reduce((s,t)=> s + t.amount, 0);
   }, [filteredTransactions]);
@@ -489,7 +637,6 @@ export default function App(){
     const isoDate = new Date().toISOString();
     if (isLiquid) setLiquid(prev=> prev.map(a=> a.id===id?{...a, amount:newAmount, asOf:now, history:[...a.history, {date: isoDate, amount:newAmount}]}:a));
     else setIlliquid(prev=> prev.map(a=> a.id===id?{...a, amount:newAmount, asOf:now, history:[...a.history, {date: isoDate, amount:newAmount}]}:a));
-    // net worth will be auto-logged via useEffect on liquid/illiquid change
   };
 
   const handleCsvUpload = (input: File | FileList | File[]) => {
@@ -499,7 +646,8 @@ export default function App(){
         const reader = new FileReader();
         reader.onload = e => {
           const text = e.target?.result as string;
-          const rawLines = text.split(/\r?\n/).filter(l=> l.trim().length>0);
+          const rawLines = text.split(/?
+/).filter(l=> l.trim().length>0);
           if (rawLines.length < 2) { resolve([]); return; }
           const headerCols = splitCsvRow(rawLines[0]).map(h=> h.trim().toLowerCase());
           const hasDebitCredit = headerCols.includes('debit') && headerCols.includes('credit');
@@ -540,8 +688,17 @@ export default function App(){
             }
             if (!desc &&!amt) return null as any;
             const isoDate = parseDateToISO(dateStr);
-            const cleanCat = getCleanCategory(desc, rawCat, amt);
-            return { id: `csv-${Date.now()}-${i}-${Math.random().toString(36).slice(2,5)}`, date: isoDate, description: desc.toUpperCase().trim(), amount: amt, category: cleanCat, account, type: amt >=0? 'income' as const : 'expense' as const } as Transaction;
+            const clean = getCleanCategory(desc, rawCat, amt, learned);
+            return {
+              id: `csv-${Date.now()}-${i}-${Math.random().toString(36).slice(2,5)}`,
+              date: isoDate,
+              description: desc.toUpperCase().trim(),
+              amount: amt,
+              category: clean.category,
+              learnedRule: clean.fromLearned,
+              account,
+              type: amt >=0? 'income' as const : 'expense' as const
+            } as Transaction;
           }).filter((t:any)=> t && t.amount!==0) as Transaction[];
           resolve(parsed);
         };
@@ -561,21 +718,51 @@ export default function App(){
     const newOnes = csvPreview.filter(t=>!existingKeys.has(`${t.date}|${t.description}|${t.amount}`));
     const merged = [...newOnes,...transactions].sort((a,b)=> b.date.localeCompare(a.date));
     setTransactions(merged);
-    recalcMonthly(merged);
     setLastImport(nowStr());
     setCsvPreview(null);
+    showNotice('success', `Imported ${newOnes.length} new transactions (${csvPreview.length - newOnes.length} duplicates skipped).`);
   };
 
   const resetToBlankSlate = () => {
     localStorage.clear();
-    setLiquid(INITIAL_LIQUID); setIlliquid(INITIAL_ILLIQUID); setBills(INITIAL_BILLS); setMonthly(INITIAL_MONTHLY); setTransactions([]); setCategories(INITIAL_CATEGORIES); setNetWorthHistory([]); setLearned({});
-    alert('All data cleared locally. Cloud will be cleared on next sync in 2 sec. To restore, Import your backup JSON.');
+    setLiquid(INITIAL_LIQUID);
+    setIlliquid(INITIAL_ILLIQUID);
+    setBills(INITIAL_BILLS);
+    setMonthly(INITIAL_MONTHLY);
+    setTransactions([]);
+    setCategories(INITIAL_CATEGORIES);
+    setNetWorthHistory([]);
+    setLearned({});
+    showNotice('info', 'All data cleared locally. Cloud sync will update in 2 seconds. Import a backup JSON anytime to restore.');
+  };
+
+  const openResetConfirm = () => {
+    setConfirmStepTwo(false);
+    setConfirmDialog({
+      title: 'Reset All Data to Blank Slate?',
+      body: `This will permanently delete all ${transactions.length} transactions, account balances, bills, and history from this device and cloud sync.`,
+      confirmLabel: 'Continue',
+      tone: 'danger',
+      requireDoubleConfirm: true,
+      onConfirm: () => {
+        resetToBlankSlate();
+        setConfirmDialog(null);
+        setConfirmStepTwo(false);
+      },
+    });
   };
 
   const addManualTransaction = () => {
-    if (!newTx.description.trim() || !newTx.amount) { alert('Need description and amount'); return; }
+    if (!newTx.description.trim() || !newTx.amount) {
+      setAddTxError('Please enter both a description and a non-zero amount.');
+      return;
+    }
     const amtNum = parseFloat(newTx.amount);
-    if (isNaN(amtNum) || amtNum===0) { alert('Invalid amount'); return; }
+    if (isNaN(amtNum) || amtNum===0) {
+      setAddTxError('Please enter a valid non-zero number for the amount.');
+      return;
+    }
+    setAddTxError('');
     const finalAmount = newTx.type==='expense' ? -Math.abs(amtNum) : Math.abs(amtNum);
     const tx: Transaction = {
       id: `manual-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
@@ -584,94 +771,269 @@ export default function App(){
       amount: finalAmount,
       category: newTx.category,
       account: 'Manual',
-      type: newTx.type
+      type: newTx.type,
+      learnedRule: false,
     };
     setTransactions(prev=> [tx, ...prev].sort((a,b)=> b.date.localeCompare(a.date)));
     setShowAddTx(false);
     setNewTx({date: new Date().toISOString().slice(0,10), description:'', amount:'', category:'Other', type:'expense'});
+    setHighlightedTxId(tx.id);
+    setTimeout(() => setHighlightedTxId(null), 2500);
+    showNotice('success', `Added ${tx.description} (${fmt(tx.amount)}).`);
   };
 
   const duplicateTransaction = (t: Transaction) => {
+    const defaultDate =
+      filterYear !== 'All' && filterMonthOnly !== 'All'
+        ? `${filterYear}-${filterMonthOnly}-${String(new Date().getDate()).padStart(2, '0')}`
+        : new Date().toISOString().slice(0, 10);
     const dup: Transaction = {
       ...t,
       id: `dup-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
-      date: new Date().toISOString().slice(0,10)
+      date: defaultDate,
     };
     setTransactions(prev=> [dup, ...prev].sort((a,b)=> b.date.localeCompare(a.date)));
+    setHighlightedTxId(dup.id);
+    setTimeout(() => setHighlightedTxId(null), 2500);
+    showNotice('success', `Duplicated "${t.description}" on ${defaultDate}.`);
   };
 
+  const requestDeleteTransaction = (t: Transaction) => {
+    setConfirmStepTwo(false);
+    setConfirmDialog({
+      title: 'Delete Transaction?',
+      body: `Remove "${t.description}" (${fmt(t.amount)}) on ${t.date}?`,
+      confirmLabel: 'Delete Transaction',
+      tone: 'danger',
+      onConfirm: () => {
+        setTransactions(prev => prev.filter(x => x.id !== t.id));
+        setConfirmDialog(null);
+        showNotice('info', `Deleted "${t.description}".`);
+      },
+    });
+  };
 
   const addCategory = () => {
     if (!newCatName.trim()) return;
-    if (categories.find(c=>c.name.toLowerCase()===newCatName.trim().toLowerCase())) { alert('exists'); return; }
+    if (categories.find(c=>c.name.toLowerCase()===newCatName.trim().toLowerCase())) {
+      showNotice('error', `Category "${newCatName.trim()}" already exists.`);
+      return;
+    }
     setCategories(prev=> [...prev, { name: newCatName.trim(), lastMonth: 0, currentMonth: 0, color: newCatColor }]);
+    showNotice('success', `Added category "${newCatName.trim()}".`);
     setNewCatName('');
   };
   const updateCategoryName = (oldName: string, newName: string) => {
     if (!newName.trim() || oldName===newName) return;
     setCategories(prev=> prev.map(c=> c.name===oldName?{...c, name:newName.trim()}:c));
     setTransactions(prev=> prev.map(t=> t.category===oldName?{...t, category:newName.trim()}:t));
+    showNotice('success', `Renamed "${oldName}" to "${newName.trim()}".`);
   };
   const updateCategoryColor = (name: string, color: string) => {
     setCategories(prev=> prev.map(c=> c.name===name?{...c, color}:c));
   };
   const deleteCategory = (name: string) => {
-    if (['Other','Transfers','Income'].includes(name)) { alert('Cannot delete system categories'); return; }
-    if (!confirm(`Delete "${name}"? Moves its transactions to Other.`)) return;
-    setCategories(prev=> prev.filter(c=>c.name!==name));
-    setTransactions(prev=> prev.map(t=> t.category===name?{...t, category:'Other'}:t));
+    if (['Other','Transfers','Income'].includes(name)) {
+      showNotice('error', `"${name}" is a protected system category and cannot be deleted.`);
+      return;
+    }
+    setConfirmStepTwo(false);
+    setConfirmDialog({
+      title: `Delete "${name}" Category?`,
+      body: `All transactions currently tagged "${name}" will be moved to "Other".`,
+      confirmLabel: 'Delete Category',
+      tone: 'danger',
+      onConfirm: () => {
+        setCategories(prev=> prev.filter(c=>c.name!==name));
+        setTransactions(prev=> prev.map(t=> t.category===name?{...t, category:'Other'}:t));
+        setConfirmDialog(null);
+        showNotice('info', `Deleted "${name}" and moved its transactions to Other.`);
+      },
+    });
+  };
+
+  const hasActiveFilters = Boolean(search || filterCat !== 'All' || filterMonth);
+  const clearFilters = () => {
+    setSearch('');
+    setFilterCat('All');
+    setFilterYear('All');
+    setFilterMonthOnly('All');
   };
 
   return (
     <PasswordGate>
     <div className="min-h-screen bg-[#f8fafc] text-slate-900">
-      <header className="sticky top-0 z-30 bg-white/80 backdrop-blur border-b">
-        <div className="max-w-[1440px] mx-auto px-4 md:px-8 py-4 flex justify-between items-center">
-          <div className="flex items-center gap-3"><div className="w-9 h-9 rounded-xl bg-slate-900 text-white grid place-items-center font-black">R</div><div><h1 className="text-[15px] font-bold">Rother Family Finance</h1><p className="text-[11px] text-slate-500">{lastImport ? `Last import: ${lastImport}` : nowStr()}</p></div></div>
-          <div className="flex items-center gap-2"><div className="hidden md:flex gap-2"><div className="px-3 py-1.5 rounded-full bg-slate-900 text-white text-xs">{fmt(netWorth)}</div><div className="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 text-[11px] border">{fmt(trueLiquidCash)}</div></div><button onClick={exportBackup} className="px-3 py-2 rounded-xl bg-emerald-600 text-white border text-xs font-semibold">Export</button><label className="px-3 py-2 rounded-xl bg-white border text-xs cursor-pointer">Import<input type="file" accept=".json" className="hidden" onChange={e=>{ const f=e.target.files?.[0]; if(f) importBackup(f); e.target.value=''; }}/></label><button onClick={()=>{ try{ sessionStorage.removeItem('fam-auth'); }catch{} location.reload(); }} className="px-3 py-2 rounded-xl bg-white border text-xs">Lock</button><button onClick={()=>{ if(!confirm("⚠️ RESET - This will DELETE ALL 1278 transactions, account balances, bills, and history from ALL devices including cloud.\n\nThis cannot be undone unless you have a backup file.\n\nType OK to continue?")) return; if(!confirm("Last chance: Are you SURE you want to blank slate?\n\nExport a backup first if you haven't.")) return; resetToBlankSlate(); }} className="px-3 py-2 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-semibold hover:bg-red-100">Reset</button></div>
+      <header className="sticky top-0 z-30 bg-white/85 backdrop-blur border-b">
+        <div className="max-w-[1440px] mx-auto px-4 md:px-8 py-4 flex justify-between items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-slate-900 text-white grid place-items-center font-black">R</div>
+            <div>
+              <h1 className="text-[15px] font-bold">Rother Family Finance</h1>
+              <p className="text-[11px] text-slate-500">{lastImport ? `Last import: ${lastImport}` : nowStr()}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Cloud Sync Status Badge */}
+            <div
+              title={lastSync ? `Last cloud sync: ${lastSync}` : 'Cloud sync status'}
+              className={`px-2.5 py-1.5 rounded-full border text-[11px] font-medium flex items-center gap-1.5 ${
+                cloudStatus === 'synced'
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                  : cloudStatus === 'syncing'
+                  ? 'bg-amber-50 border-amber-200 text-amber-700'
+                  : cloudStatus === 'error'
+                  ? 'bg-red-50 border-red-200 text-red-700'
+                  : 'bg-slate-100 border-slate-200 text-slate-600'
+              }`}
+            >
+              {cloudStatus === 'synced' && <Cloud size={12} />}
+              {cloudStatus === 'syncing' && <RefreshCw size={12} className="animate-spin" />}
+              {cloudStatus === 'error' && <CloudOff size={12} />}
+              {cloudStatus === 'offline' && <CloudOff size={12} />}
+              <span>
+                {cloudStatus === 'synced' && `Saved${lastSync ? ` · ${lastSync}` : ''}`}
+                {cloudStatus === 'syncing' && 'Syncing...'}
+                {cloudStatus === 'error' && 'Sync Error'}
+                {cloudStatus === 'offline' && 'Offline'}
+              </span>
+            </div>
+
+            <div className="hidden md:flex gap-2">
+              <div className="px-3 py-1.5 rounded-full bg-slate-900 text-white text-xs">{fmt(netWorth)}</div>
+              <div className="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 text-[11px] border">{fmt(trueLiquidCash)}</div>
+            </div>
+            <button onClick={exportBackup} className="px-3 py-2 rounded-xl bg-emerald-600 text-white border text-xs font-semibold hover:bg-emerald-700">Export</button>
+            <label className="px-3 py-2 rounded-xl bg-white border text-xs cursor-pointer hover:bg-slate-50">
+              Import
+              <input type="file" accept=".json" className="hidden" onChange={e=>{ const f=e.target.files?.[0]; if(f) importBackup(f); e.target.value=''; }}/>
+            </label>
+            <button onClick={()=>{ try{ sessionStorage.removeItem('fam-auth'); }catch{} location.reload(); }} className="px-3 py-2 rounded-xl bg-white border text-xs hover:bg-slate-50">Lock</button>
+            <button onClick={openResetConfirm} className="px-3 py-2 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-semibold hover:bg-red-100">Reset</button>
+          </div>
         </div>
         <div className="max-w-[1440px] mx-auto px-4 md:px-8 flex gap-1 overflow-x-auto">
           {['overview','accounts','bills','transactions','categories'].map(k=> <button key={k} onClick={()=>setTab(k as any)} className={`px-4 py-3 text-[13px] font-medium border-b-2 ${tab===k?'border-slate-900 text-slate-900':'border-transparent text-slate-500'}`}>{k.charAt(0).toUpperCase()+k.slice(1)}</button>)}
         </div>
       </header>
+
+      {/* Inline Feedback Banner */}
+      {banner && (
+        <div className="max-w-[1440px] mx-auto px-4 md:px-8 pt-4">
+          <div className={`rounded-xl border px-4 py-3 flex items-center justify-between gap-3 text-[12px] ${
+            banner.type === 'success'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+              : banner.type === 'error'
+              ? 'bg-red-50 border-red-200 text-red-800'
+              : 'bg-slate-100 border-slate-300 text-slate-800'
+          }`}>
+            <div className="flex items-center gap-2">
+              {banner.type === 'success' && <CheckCircle2 size={15} />}
+              {banner.type === 'error' && <AlertTriangle size={15} />}
+              {banner.type === 'info' && <Info size={15} />}
+              <span className="font-medium">{banner.message}</span>
+            </div>
+            <button onClick={() => setBanner(null)} className="p-1 rounded hover:bg-black/5">
+              <X size={14} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Modal */}
+      {confirmDialog && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs grid place-items-center px-4">
+          <div className="w-full max-w-[420px] rounded-2xl bg-white border shadow-xl p-6 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-xl bg-red-50 text-red-600 grid place-items-center shrink-0">
+                <AlertTriangle size={18} />
+              </div>
+              <div>
+                <h3 className="font-bold text-[15px] text-slate-900">
+                  {confirmStepTwo ? 'Final Confirmation: Blank Slate Reset' : confirmDialog.title}
+                </h3>
+                <p className="text-[12px] text-slate-600 mt-1">
+                  {confirmStepTwo
+                    ? 'This cannot be undone unless you have exported a backup JSON file. Proceed with wiping all local and cloud records?'
+                    : confirmDialog.body}
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                onClick={() => { setConfirmDialog(null); setConfirmStepTwo(false); }}
+                className="px-3.5 py-2 rounded-xl bg-white border text-xs font-medium hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (confirmDialog.requireDoubleConfirm && !confirmStepTwo) {
+                    setConfirmStepTwo(true);
+                  } else {
+                    confirmDialog.onConfirm();
+                  }
+                }}
+                className="px-3.5 py-2 rounded-xl bg-red-600 text-white text-xs font-semibold hover:bg-red-700"
+              >
+                {confirmStepTwo ? 'Yes, Wipe Everything' : confirmDialog.confirmLabel}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Backup Restore Modal */}
+      {pendingRestore && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs grid place-items-center px-4">
+          <div className="w-full max-w-[420px] rounded-2xl bg-white border shadow-xl p-6 space-y-4">
+            <h3 className="font-bold text-[15px]">Restore Backup File?</h3>
+            <p className="text-[12px] text-slate-600">
+              Exported at <span className="font-semibold">{pendingRestore.exportedAt || 'unknown date'}</span> with{' '}
+              <span className="font-semibold">{pendingRestore.transactions?.length || 0}</span> transactions. This will replace your current workspace data.
+            </p>
+            <div className="flex justify-end gap-2 pt-2">
+              <button onClick={() => setPendingRestore(null)} className="px-3.5 py-2 rounded-xl bg-white border text-xs font-medium hover:bg-slate-50">
+                Cancel
+              </button>
+              <button onClick={applyPendingRestore} className="px-3.5 py-2 rounded-xl bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700">
+                Restore Backup
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <main className="max-w-[1440px] mx-auto px-4 md:px-8 py-6">
         {tab==='overview' && (
           <div className="space-y-6">
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               <div className="rounded-2xl bg-white border p-5"><p className="text-[11px] uppercase text-slate-500">Net Worth</p><p className="text-2xl font-bold mt-1">{fmt(netWorth)}</p></div>
               <div className="rounded-2xl bg-white border p-5"><p className="text-[11px] uppercase text-slate-500">True Liquid</p><p className="text-2xl font-bold mt-1">{fmt(trueLiquidCash)}</p></div>
-              <div className="rounded-2xl bg-white border p-5"><p className="text-[11px] uppercase text-slate-500">{(currentMonthRec as any).month?.toUpperCase() || new Date().toLocaleDateString('en-US',{month:'short', year:'numeric'}).toUpperCase()} NET</p><p className={`text-2xl font-bold mt-1 ${currentMonthRec.net<0?'text-red-600':'text-emerald-600'}`}>{fmt(currentMonthRec.net)}</p><p className="text-[11px] text-slate-500 mt-1">{transactions.length} txns • YTD {fmt(ytdNet)}</p></div>
-              <div className="rounded-2xl bg-white border p-5"><p className="text-[11px] uppercase text-slate-500">Bills — {new Date().toLocaleDateString('en-US',{month:'long', year:'numeric'})}</p><p className="text-2xl font-bold mt-1">{fmt(monthlyBillsSum)}</p><p className="text-[10px] text-slate-500 mt-1">{bills.filter(b=>!b.isPaid).length} unpaid • due this month</p></div>
+              <div className="rounded-2xl bg-white border p-5"><p className="text-[11px] uppercase text-slate-500">{currentMonthRec.month?.toUpperCase() || new Date().toLocaleDateString('en-US',{month:'short', year:'numeric'}).toUpperCase()} NET</p><p className={`text-2xl font-bold mt-1 ${currentMonthRec.net<0?'text-red-600':'text-emerald-600'}`}>{fmt(currentMonthRec.net)}</p><p className="text-[11px] text-slate-500 mt-1">{transactions.length} txns • {activeOverviewYear} Net {fmt(ytdNet)}</p></div>
+              <div className="rounded-2xl bg-white border p-5">
+                <p className="text-[11px] uppercase text-slate-500">Bills Due — {new Date().toLocaleDateString('en-US',{month:'long', year:'numeric'})}</p>
+                <p className="text-2xl font-bold mt-1">{fmt(billsSummary.dueThisMonthTotal)}</p>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  <span className="text-emerald-700 font-medium">{fmt(billsSummary.paidThisMonthTotal)} paid</span> ·{' '}
+                  <span className="text-amber-700 font-medium">{fmt(billsSummary.unpaidThisMonthTotal)} remaining</span> ({billsSummary.unpaidThisMonthCount} unpaid)
+                </p>
+              </div>
             </div>
             <div className="grid lg:grid-cols-1 gap-6">
               <div className="rounded-2xl bg-white border p-5">
-                <h3 className="font-semibold text-[13px] mb-1">Spending by Category — {filterMonth || 'All Time'}</h3>
-                <p className="text-[11px] text-slate-500 mb-4">Excludes Income & Transfers • {filteredTransactions.filter(t=>t.amount<0).length} expenses</p>
+                <div className="flex justify-between items-start gap-2 flex-wrap mb-1">
+                  <h3 className="font-semibold text-[13px]">Spending by Category — {filterMonth || 'All Time'}</h3>
+                  <span className="text-[11px] text-slate-500">Synced with Transactions filter</span>
+                </div>
+                <p className="text-[11px] text-slate-500 mb-4">Excludes Income & Transfers • {filteredTransactions.filter(t=>t.amount<0 && t.category!=='Transfers' && t.category!=='Income').length} expenses</p>
                 <div className="h-[280px]">
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
                       <Pie
-                        data={(() => {
-                          const map = new Map<string, number>();
-                          const colors = new Map<string, string>();
-                          filteredTransactions.filter(t=> t.amount<0 && t.category!=='Transfers' && t.category!=='Income').forEach(t=>{
-                            map.set(t.category, (map.get(t.category)||0) + Math.abs(t.amount));
-                            const cat = categories.find(c=>c.name===t.category);
-                            if (cat) colors.set(t.category, cat.color);
-                          });
-                          return Array.from(map.entries()).map(([name,value])=> ({ name, value, color: colors.get(name)||'#94a3b8' })).sort((a,b)=>b.value-a.value);
-                        })()}
+                        data={categoryBreakdown.items}
                         cx="50%" cy="50%" innerRadius={55} outerRadius={95} dataKey="value" nameKey="name" paddingAngle={2}
                       >
-                        {(() => {
-                          const map = new Map<string, number>();
-                          const colors = new Map<string, string>();
-                          filteredTransactions.filter(t=> t.amount<0 && t.category!=='Transfers' && t.category!=='Income').forEach(t=>{
-                            const cat = categories.find(c=>c.name===t.category);
-                            if (cat) colors.set(t.category, cat.color);
-                          });
-                          return Array.from(colors.values()).map((color,i)=><Cell key={i} fill={color} />);
-                        })()}
+                        {categoryBreakdown.items.map((item) => <Cell key={item.name} fill={item.color} />)}
                       </Pie>
                       <Tooltip formatter={(v:any)=> fmt(v as number)} />
                       <Legend />
@@ -679,26 +1041,32 @@ export default function App(){
                   </ResponsiveContainer>
                 </div>
                 <div className="mt-3 space-y-1 max-h-[140px] overflow-auto">
-                  {(() => {
-                    const map = new Map<string, number>();
-                    filteredTransactions.filter(t=> t.amount<0 && t.category!=='Transfers' && t.category!=='Income').forEach(t=>{
-                      map.set(t.category, (map.get(t.category)||0) + Math.abs(t.amount));
-                    });
-                    const total = Array.from(map.values()).reduce((a,b)=>a+b,0);
-                    return Array.from(map.entries()).sort((a,b)=>b[1]-a[1]).map(([name,val])=>{
-                      const cat = categories.find(c=>c.name===name);
-                      return <div key={name} className="flex justify-between text-[11px]"><div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-full" style={{background: cat?.color||'#94a3b8'}}/><span>{name}</span></div><span className="font-medium">{fmt(val)} ({total>0? Math.round(val/total*100):0}%)</span></div>;
-                    });
-                  })()}
+                  {categoryBreakdown.items.map(({ name, value, color }) => (
+                    <div key={name} className="flex justify-between text-[11px]">
+                      <div className="flex items-center gap-2">
+                        <div className="w-2.5 h-2.5 rounded-full" style={{background: color}}/>
+                        <span>{name}</span>
+                      </div>
+                      <span className="font-medium">{fmt(value)} ({categoryBreakdown.total>0? Math.round(value/categoryBreakdown.total*100):0}%)</span>
+                    </div>
+                  ))}
                 </div>
               </div>
-
             </div>
 
             <div className="rounded-2xl bg-white border p-5">
-              <h3 className="font-semibold text-[13px] mb-4">Monthly — auto-updates from transactions (Transfers excluded)</h3>
+              <div className="flex justify-between items-center gap-2 flex-wrap mb-4">
+                <div>
+                  <h3 className="font-semibold text-[13px]">Monthly Cash Flow ({activeOverviewYear}) — Transfers excluded</h3>
+                  <p className="text-[11px] text-slate-500">
+                    {filterYear === 'All'
+                      ? `Showing current calendar year (${activeOverviewYear}). Select a specific year in Transactions to view historical annual charts.`
+                      : `Aligned with selected Transactions year (${activeOverviewYear}).`}
+                  </p>
+                </div>
+              </div>
               <div className="h-[220px]"><ResponsiveContainer width="100%" height="100%"><BarChart data={monthly}><CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false}/><XAxis dataKey="month" tick={{fontSize:11}}/><YAxis tick={{fontSize:11}} tickFormatter={v=>`$${(v/1000).toFixed(0)}k`}/><Tooltip formatter={(v:any)=>fmt(v as number)}/><Bar dataKey="income" fill="#0f172a" radius={[6,6,0,0]}/><Bar dataKey="expense" fill="#ef4444" radius={[6,6,0,0]}/></BarChart></ResponsiveContainer></div>
-              <div className="mt-4 overflow-x-auto"><table className="w-full text-[12px]"><thead><tr className="text-slate-500 bg-slate-50/80"><th className="text-left font-medium px-4 py-2">Month</th><th className="text-right font-medium px-3 py-2">Income</th><th className="text-right font-medium px-3 py-2">Expenses</th><th className="text-right font-medium px-3 py-2">Net</th></tr></thead><tbody>{monthly.map(m=> <tr key={m.month} className="border-t"><td className="px-4 py-2 font-medium">{m.month}</td><td className="px-3 py-2 text-right">{fmt(m.income)}</td><td className="px-3 py-2 text-right text-red-600">{fmt(m.expense)}</td><td className={`px-3 py-2 text-right font-semibold ${m.net<0?'text-red-600':'text-emerald-600'}`}>{fmt(m.net)}</td></tr>)}<tr className="border-t-2 border-slate-900 font-bold bg-slate-50"><td className="px-4 py-2">YTD</td><td className="px-3 py-2 text-right">{fmt(monthly.reduce((s,m)=>s+m.income,0))}</td><td className="px-3 py-2 text-right">{fmt(monthly.reduce((s,m)=>s+m.expense,0))}</td><td className="px-3 py-2 text-right">{fmt(ytdNet)}</td></tr></tbody></table></div>
+              <div className="mt-4 overflow-x-auto"><table className="w-full text-[12px]"><thead><tr className="text-slate-500 bg-slate-50/80"><th className="text-left font-medium px-4 py-2">Month</th><th className="text-right font-medium px-3 py-2">Income</th><th className="text-right font-medium px-3 py-2">Expenses</th><th className="text-right font-medium px-3 py-2">Net</th></tr></thead><tbody>{monthly.map(m=> <tr key={m.month} className="border-t"><td className="px-4 py-2 font-medium">{m.month}</td><td className="px-3 py-2 text-right">{fmt(m.income)}</td><td className="px-3 py-2 text-right text-red-600">{fmt(m.expense)}</td><td className={`px-3 py-2 text-right font-semibold ${m.net<0?'text-red-600':'text-emerald-600'}`}>{fmt(m.net)}</td></tr>)}<tr className="border-t-2 border-slate-900 font-bold bg-slate-50"><td className="px-4 py-2">{activeOverviewYear} Total</td><td className="px-3 py-2 text-right">{fmt(monthly.reduce((s,m)=>s+m.income,0))}</td><td className="px-3 py-2 text-right">{fmt(monthly.reduce((s,m)=>s+m.expense,0))}</td><td className="px-3 py-2 text-right">{fmt(ytdNet)}</td></tr></tbody></table></div>
             </div>
           </div>
         )}
@@ -710,14 +1078,117 @@ export default function App(){
         )}
         {tab==='bills' && (
           <div className="space-y-4">
-            <div className="rounded-2xl bg-slate-900 text-white p-4 flex justify-between items-center">
-              <div>
-                <h3 className="font-bold text-[14px]">{new Date().toLocaleDateString('en-US',{month:'long', year:'numeric'})} Bills</h3>
-                <p className="text-[11px] text-slate-300 mt-0.5">{bills.filter(b=>b.isPaid).length} of {bills.length} paid • {new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(bills.reduce((s,b)=> s + b.amountDue * monthlyFactor(b.frequency), 0))} monthly total</p>
+            {/* Clear Breakdown of Due This Month vs. Paid vs. Remaining vs. Annualized Avg */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              <div className="rounded-2xl bg-slate-900 text-white p-4">
+                <p className="text-[10px] uppercase tracking-wider text-slate-300">Due in {new Date().toLocaleDateString('en-US',{month:'long'})}</p>
+                <p className="text-xl font-bold mt-1">{fmt(billsSummary.dueThisMonthTotal)}</p>
+                <p className="text-[11px] text-slate-300 mt-0.5">{billsSummary.dueThisMonthCount} bills scheduled this month</p>
               </div>
-              <div className="text-right text-[11px] text-slate-400">{new Date().toLocaleDateString('en-US',{weekday:'long'})}</div>
+              <div className="rounded-2xl bg-white border p-4">
+                <p className="text-[10px] uppercase tracking-wider text-emerald-700 font-semibold">Paid This Month</p>
+                <p className="text-xl font-bold text-emerald-700 mt-1">{fmt(billsSummary.paidThisMonthTotal)}</p>
+                <p className="text-[11px] text-slate-500 mt-0.5">{billsSummary.paidThisMonthCount} of {billsSummary.dueThisMonthCount} due bills paid</p>
+              </div>
+              <div className="rounded-2xl bg-white border p-4">
+                <p className="text-[10px] uppercase tracking-wider text-amber-700 font-semibold">Remaining Unpaid</p>
+                <p className="text-xl font-bold text-amber-700 mt-1">{fmt(billsSummary.unpaidThisMonthTotal)}</p>
+                <p className="text-[11px] text-slate-500 mt-0.5">{billsSummary.unpaidThisMonthCount} due bills left to pay</p>
+              </div>
+              <div className="rounded-2xl bg-white border p-4">
+                <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Annualized Monthly Avg</p>
+                <p className="text-xl font-bold text-slate-900 mt-1">{fmt(billsSummary.annualizedMonthlyAvg)}</p>
+                <p className="text-[11px] text-slate-500 mt-0.5">Prorated across all 12 months</p>
+              </div>
             </div>
-          <div className="rounded-2xl bg-white border overflow-hidden"><div className="px-5 py-4 border-b flex justify-between items-center"><h3 className="font-semibold text-[13px]">Bills — {new Date().toLocaleDateString('en-US',{month:'long'})} (Car Tax yearly shows in Sept)</h3><div className="flex gap-2"><button onClick={()=>{ if(!confirm('Reset ALL bill amounts to $0?')) return; setBills(prev=> prev.map(b=> ({...b, amountDue: 0}))); }} className="px-2.5 py-1 rounded-full bg-red-50 border border-red-200 text-red-700 text-[11px] font-semibold hover:bg-red-100">Reset Amounts to $0</button><button onClick={()=>setBills(prev=> prev.map(b=> ({...b, isPaid: false})))} className="px-2.5 py-1 rounded-full bg-white border text-[11px]">Unpaid all</button><button onClick={()=>setBills(prev=> prev.map(b=> ({...b, isPaid: true})))} className="px-2.5 py-1 rounded-full bg-emerald-50 border text-[11px]">Paid all</button></div></div><div className="overflow-x-auto"><table className="w-full text-[12px]"><thead className="bg-slate-50 text-slate-500"><tr><th className="text-left px-4 py-2.5">Name</th><th className="text-left px-3 py-2.5">Freq</th><th className="text-left px-3 py-2.5">Due Month</th><th className="text-right px-3 py-2.5">Amount</th><th className="text-center px-3 py-2.5">Paid</th></tr></thead><tbody>{bills.map(b=> (<tr key={b.id} className="border-t"><td className="px-4 py-2.5">{b.name}</td><td className="px-3 py-2.5"><select value={b.frequency} onChange={e=> setBills(prev=> prev.map(x=> x.id===b.id?{...x,frequency:e.target.value}:x))} className="px-2 py-1 rounded-lg border text-[12px]">{FREQUENCIES.map(f=> <option key={f} value={f}>{f}</option>)}</select></td><td className="px-3 py-2.5"><select value={b.dueMonth || ''} onChange={e=> setBills(prev=> prev.map(x=> x.id===b.id?{...x,dueMonth: e.target.value ? parseInt(e.target.value) : undefined}:x))} className="px-2 py-1 rounded-lg border text-[12px]"><option value="">—</option><option value="1">Jan</option><option value="2">Feb</option><option value="3">Mar</option><option value="4">Apr</option><option value="5">May</option><option value="6">Jun</option><option value="7">Jul</option><option value="8">Aug</option><option value="9">Sep</option><option value="10">Oct</option><option value="11">Nov</option><option value="12">Dec</option></select></td><td className="px-3 py-2.5 text-right"><input type="number" value={b.amountDue} onChange={e=> setBills(prev=> prev.map(x=> x.id===b.id?{...x, amountDue: parseFloat(e.target.value)||0}:x))} className="w-[100px] text-right px-2 py-1 rounded-lg border"/></td><td className="px-3 py-2.5 text-center"><button onClick={()=> setBills(prev=> prev.map(x=> x.id===b.id?{...x,isPaid:!x.isPaid}:x))} className={`px-3 py-1 rounded-full text-[11px] border ${b.isPaid?'bg-emerald-50 border-emerald-200 text-emerald-700':'bg-white border-slate-200'}`}>{b.isPaid?'Paid':'Mark Paid'}</button></td></tr>))}</tbody></table></div></div>
+
+            <div className="rounded-2xl bg-white border overflow-hidden">
+              <div className="px-5 py-4 border-b flex justify-between items-center gap-2 flex-wrap">
+                <div>
+                  <h3 className="font-semibold text-[13px]">Bills Schedule — {new Date().toLocaleDateString('en-US',{month:'long', year:'numeric'})}</h3>
+                  <p className="text-[11px] text-slate-500">Highlighted rows are included in this month&apos;s due total; muted rows are scheduled for other months.</p>
+                </div>
+                <div className="flex gap-2 flex-wrap">
+                  <button
+                    onClick={() => {
+                      setConfirmStepTwo(false);
+                      setConfirmDialog({
+                        title: 'Reset All Bill Amounts to $0?',
+                        body: 'This will set the Amount Due for every bill in the table to $0.00.',
+                        confirmLabel: 'Reset Amounts',
+                        tone: 'danger',
+                        onConfirm: () => {
+                          setBills(prev=> prev.map(b=> ({...b, amountDue: 0})));
+                          setConfirmDialog(null);
+                          showNotice('info', 'All bill amounts reset to $0.');
+                        }
+                      });
+                    }}
+                    className="px-2.5 py-1 rounded-full bg-red-50 border border-red-200 text-red-700 text-[11px] font-semibold hover:bg-red-100"
+                  >
+                    Reset Amounts to $0
+                  </button>
+                  <button onClick={()=>setBills(prev=> prev.map(b=> ({...b, isPaid: false})))} className="px-2.5 py-1 rounded-full bg-white border text-[11px] hover:bg-slate-50">Unpaid all</button>
+                  <button onClick={()=>setBills(prev=> prev.map(b=> ({...b, isPaid: true})))} className="px-2.5 py-1 rounded-full bg-emerald-50 border text-[11px] hover:bg-emerald-100">Paid all</button>
+                </div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-[12px]">
+                  <thead className="bg-slate-50 text-slate-500">
+                    <tr>
+                      <th className="text-left px-4 py-2.5">Name</th>
+                      <th className="text-left px-3 py-2.5">This Month</th>
+                      <th className="text-left px-3 py-2.5">Freq</th>
+                      <th className="text-left px-3 py-2.5">Due Month</th>
+                      <th className="text-right px-3 py-2.5">Amount</th>
+                      <th className="text-center px-3 py-2.5">Paid</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bills.map(b => {
+                      const status = isBillDueInMonth(b, currentCalendarMonth);
+                      return (
+                        <tr key={b.id} className={`border-t ${status.due ? 'bg-white' : 'bg-slate-50/70 text-slate-400'}`}>
+                          <td className="px-4 py-2.5 font-medium">
+                            <span className={status.due ? 'text-slate-900' : 'text-slate-500'}>{b.name}</span>
+                          </td>
+                          <td className="px-3 py-2.5">
+                            {status.due ? (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                Included · {status.reason}
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-500 border border-slate-200">
+                                Not Due · {status.reason}
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2.5">
+                            <select value={b.frequency} onChange={e=> setBills(prev=> prev.map(x=> x.id===b.id?{...x,frequency:e.target.value}:x))} className="px-2 py-1 rounded-lg border text-[12px] bg-white text-slate-900">
+                              {FREQUENCIES.map(f=> <option key={f} value={f}>{f}</option>)}
+                            </select>
+                          </td>
+                          <td className="px-3 py-2.5">
+                            <select value={b.dueMonth || ''} onChange={e=> setBills(prev=> prev.map(x=> x.id===b.id?{...x,dueMonth: e.target.value ? parseInt(e.target.value) : undefined}:x))} className="px-2 py-1 rounded-lg border text-[12px] bg-white text-slate-900">
+                              <option value="">—</option>
+                              <option value="1">Jan</option><option value="2">Feb</option><option value="3">Mar</option><option value="4">Apr</option><option value="5">May</option><option value="6">Jun</option><option value="7">Jul</option><option value="8">Aug</option><option value="9">Sep</option><option value="10">Oct</option><option value="11">Nov</option><option value="12">Dec</option>
+                            </select>
+                          </td>
+                          <td className="px-3 py-2.5 text-right">
+                            <input type="number" value={b.amountDue} onChange={e=> setBills(prev=> prev.map(x=> x.id===b.id?{...x, amountDue: parseFloat(e.target.value)||0}:x))} className="w-[100px] text-right px-2 py-1 rounded-lg border bg-white text-slate-900"/>
+                          </td>
+                          <td className="px-3 py-2.5 text-center">
+                            <button onClick={()=> setBills(prev=> prev.map(x=> x.id===b.id?{...x,isPaid:!x.isPaid}:x))} className={`px-3 py-1 rounded-full text-[11px] border ${b.isPaid?'bg-emerald-50 border-emerald-200 text-emerald-700 font-semibold':'bg-white border-slate-200 text-slate-700'}`}>
+                              {b.isPaid?'Paid':'Mark Paid'}
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
         )}
         {tab==='transactions' && (
@@ -725,11 +1196,11 @@ export default function App(){
             <div className="rounded-2xl bg-white border p-5">
               <h3 className="font-semibold text-[13px] mb-4">Import CSVs</h3>
               <div onDragOver={e=>e.preventDefault()} onDrop={e=>{ e.preventDefault(); const files=e.dataTransfer.files; if(files.length>0) handleCsvUpload(files); }} className="rounded-2xl border-2 border-dashed bg-slate-50 p-8 text-center"><p className="text-[13px] font-medium">Drag & drop CSVs</p><p className="text-[11px] text-slate-500 mt-1">Multi-file • AUTOMATIC PAYMENT - THANK = Transfer • Venmo cashout = Income</p><label className="mt-3 inline-flex px-4 py-2 rounded-xl bg-slate-900 text-white text-xs cursor-pointer">Browse<input type="file" accept=".csv" multiple className="hidden" onChange={e=> e.target.files && handleCsvUpload(e.target.files)}/></label></div>
-              {csvPreview && (<div className="mt-4 border rounded-xl p-4"><p className="text-[12px] font-semibold">{csvPreview.length} preview — Overview will update on Import</p><div className="mt-2 max-h-[160px] overflow-auto text-[11px]">{csvPreview.slice(0,8).map(t=> <div key={t.id} className="flex justify-between"><span className="truncate">{t.date} {t.description}</span><span>{fmt(t.amount)} {t.category}</span></div>)}</div><div className="mt-3 flex gap-2"><button onClick={()=>setCsvPreview(null)} className="px-3 py-2 bg-white border rounded-xl text-xs">Cancel</button><button onClick={confirmCsvImport} className="px-3 py-2 bg-slate-900 text-white rounded-xl text-xs">Import {csvPreview.length} → Updates Overview</button></div></div>)}
+              {csvPreview && (<div className="mt-4 border rounded-xl p-4"><p className="text-[12px] font-semibold">{csvPreview.length} preview — Overview will update on Import</p><div className="mt-2 max-h-[160px] overflow-auto text-[11px]">{csvPreview.slice(0,8).map(t=> <div key={t.id} className="flex justify-between gap-2"><span className="truncate">{t.date} {t.description}</span><span className="shrink-0">{fmt(t.amount)} · {t.category}{t.learnedRule ? ' (Learned)' : ''}</span></div>)}</div><div className="mt-3 flex gap-2"><button onClick={()=>setCsvPreview(null)} className="px-3 py-2 bg-white border rounded-xl text-xs">Cancel</button><button onClick={confirmCsvImport} className="px-3 py-2 bg-slate-900 text-white rounded-xl text-xs">Import {csvPreview.length} → Updates Overview</button></div></div>)}
             </div>
             <div className="rounded-2xl bg-white border overflow-hidden">
               <div className="px-5 py-4 border-b flex gap-2 items-center flex-wrap">
-                <button onClick={()=> setShowAddTx(v=>!v)} className="px-3 py-2 rounded-xl bg-emerald-600 text-white text-xs font-semibold">+ Add Transaction</button>
+                <button onClick={()=> { setShowAddTx(v=>!v); setAddTxError(''); }} className="px-3 py-2 rounded-xl bg-emerald-600 text-white text-xs font-semibold">+ Add Transaction</button>
                 <Search size={14} className="text-slate-400"/>
                 <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search" className="px-3 py-2 rounded-xl bg-slate-50 border text-xs w-[200px]"/>
                 <select value={filterYear} onChange={e=>setFilterYear(e.target.value)} className="px-2.5 py-2 rounded-xl border text-xs bg-white">
@@ -755,24 +1226,40 @@ export default function App(){
                   <option value="11">Nov</option>
                   <option value="12">Dec</option>
                 </select>
-                <select value={filterCat} onChange={e=>setFilterCat(e.target.value)} className="px-2.5 py-2 rounded-xl border text-xs"><option value="All">All</option>{categories.map(c=> <option key={c.name} value={c.name}>{c.name}</option>)}</select>
-                <span className="ml-auto text-[11px]">{filteredTransactions.length} txns • {fmt(filteredExpense)} spent • {filterMonth ? (filterMonthOnly==='All' ? `${filterYear} Year` : filterMonth) : 'All Time'}</span>
+                <select value={filterCat} onChange={e=>setFilterCat(e.target.value)} className="px-2.5 py-2 rounded-xl border text-xs bg-white"><option value="All">All Categories</option>{categories.map(c=> <option key={c.name} value={c.name}>{c.name}</option>)}</select>
+                {hasActiveFilters && (
+                  <button onClick={clearFilters} className="px-2.5 py-2 rounded-xl bg-slate-100 text-slate-700 text-xs hover:bg-slate-200">
+                    Clear Filters
+                  </button>
+                )}
+                <span className="ml-auto text-[11px] font-medium text-slate-600">
+                  Showing: {filterMonth ? (filterMonthOnly==='All' ? `${filterYear} Year` : filterMonth) : 'All Time'}
+                  {filterCat !== 'All' ? ` · ${filterCat}` : ''}
+                  {search ? ` · "${search}"` : ''} ({filteredTransactions.length} txns • {fmt(filteredExpense)} spent)
+                </span>
               </div>
               {showAddTx && (
-                <div className="px-5 py-4 bg-emerald-50/50 border-b grid grid-cols-2 md:grid-cols-6 gap-2">
-                  <input type="date" value={newTx.date} onChange={e=> setNewTx({...newTx, date:e.target.value})} className="px-2 py-2 rounded-lg border text-xs"/>
-                  <input value={newTx.description} onChange={e=> setNewTx({...newTx, description:e.target.value})} placeholder="Description" className="px-2 py-2 rounded-lg border text-xs col-span-2"/>
-                  <input type="number" step="0.01" value={newTx.amount} onChange={e=> setNewTx({...newTx, amount:e.target.value})} placeholder="Amount  e.g. 25.50" className="px-2 py-2 rounded-lg border text-xs"/>
-                  <select value={newTx.type} onChange={e=> setNewTx({...newTx, type:e.target.value as any})} className="px-2 py-2 rounded-lg border text-xs bg-white">
-                    <option value="expense">Expense</option>
-                    <option value="income">Income</option>
-                  </select>
-                  <select value={newTx.category} onChange={e=> setNewTx({...newTx, category:e.target.value})} className="px-2 py-2 rounded-lg border text-xs bg-white">
-                    <option value="Income">Income</option>
-                    {categories.map(c=> <option key={c.name} value={c.name}>{c.name}</option>)}
-                  </select>
-                  <div className="col-span-2 md:col-span-6 flex gap-2 justify-end mt-1">
-                    <button onClick={()=> setShowAddTx(false)} className="px-3 py-1.5 rounded-lg bg-white border text-xs">Cancel</button>
+                <div className="px-5 py-4 bg-emerald-50/50 border-b space-y-2">
+                  <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
+                    <input type="date" value={newTx.date} onChange={e=> { setNewTx({...newTx, date:e.target.value}); setAddTxError(''); }} className="px-2 py-2 rounded-lg border text-xs bg-white"/>
+                    <input value={newTx.description} onChange={e=> { setNewTx({...newTx, description:e.target.value}); setAddTxError(''); }} placeholder="Description" className="px-2 py-2 rounded-lg border text-xs col-span-2 bg-white"/>
+                    <input type="number" step="0.01" value={newTx.amount} onChange={e=> { setNewTx({...newTx, amount:e.target.value}); setAddTxError(''); }} placeholder="Amount e.g. 25.50" className="px-2 py-2 rounded-lg border text-xs bg-white"/>
+                    <select value={newTx.type} onChange={e=> setNewTx({...newTx, type:e.target.value as any})} className="px-2 py-2 rounded-lg border text-xs bg-white">
+                      <option value="expense">Expense</option>
+                      <option value="income">Income</option>
+                    </select>
+                    <select value={newTx.category} onChange={e=> setNewTx({...newTx, category:e.target.value})} className="px-2 py-2 rounded-lg border text-xs bg-white">
+                      <option value="Income">Income</option>
+                      {categories.map(c=> <option key={c.name} value={c.name}>{c.name}</option>)}
+                    </select>
+                  </div>
+                  {addTxError && (
+                    <p className="text-[11px] text-red-600 font-medium flex items-center gap-1">
+                      <AlertTriangle size={12} /> {addTxError}
+                    </p>
+                  )}
+                  <div className="flex gap-2 justify-end">
+                    <button onClick={()=> { setShowAddTx(false); setAddTxError(''); }} className="px-3 py-1.5 rounded-lg bg-white border text-xs">Cancel</button>
                     <button onClick={addManualTransaction} className="px-4 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-semibold">Add</button>
                   </div>
                 </div>
@@ -780,20 +1267,62 @@ export default function App(){
               <div className="overflow-x-auto">
                 <table className="w-full text-[12px]">
                   <thead className="bg-slate-50"><tr><th className="text-left px-4 py-2.5">Date</th><th className="text-left px-3 py-2.5">Description</th><th className="text-right px-3 py-2.5">Amount</th><th className="text-left px-3 py-2.5">Category - editable</th><th className="px-4"></th></tr></thead>
-                  <tbody>{filteredTransactions.map(t=> (<tr key={t.id} className="border-t"><td className="px-4 py-2.5 text-slate-600">{t.date}</td><td className="px-3 py-2.5 font-medium max-w-[260px] truncate">{t.description}</td><td className={`px-3 py-2.5 text-right font-semibold ${t.amount<0?'text-red-600':'text-emerald-700'}`}>{fmt(t.amount)}</td><td className="px-3 py-2.5"><select value={t.category} onChange={e=> {
-                        const newCat = e.target.value;
-                        const newType = newCat==='Income' ? 'income' as const : newCat==='Transfers' ? x.type : 'expense' as const;
-                        setTransactions(prev=> prev.map(x=> x.id===t.id?{...x, category:newCat, type:newType}:x));
-                        const key = t.description.toUpperCase().trim();
-                        const baseKey = key.replace(/#\d+/g,'').replace(/\s+\d+$/g,'').trim().replace(/\s+/g,' ');
-                        const baseKey2 = baseKey.replace(/#.*$/,'').trim();
-                        setLearned(prev=> {
-                          const next:any = {...prev, [key]: newCat};
-                          if (baseKey && baseKey!==key) next[baseKey]=newCat;
-                          if (baseKey2 && baseKey2!==key) next[baseKey2]=newCat;
-                          return next;
-                        });
-                      }} className="px-2 py-1 rounded-lg border text-[11px] bg-white w-full"><option value="Income">Income</option>{categories.map(c=> <option key={c.name} value={c.name}>{c.name}</option>)}</select></td><td className="px-4 py-2.5 text-right flex gap-2 justify-end"><button onClick={()=> duplicateTransaction(t)} className="text-[11px] px-2 py-1 rounded bg-white border hover:bg-slate-50">Duplicate</button><button onClick={()=> setTransactions(prev=> prev.filter(x=>x.id!==t.id))} className="text-[11px] text-slate-400">Delete</button></td></tr>))}</tbody>
+                  <tbody>
+                    {filteredTransactions.map(t=> {
+                      const isLearnedMatch = Boolean(t.learnedRule || matchLearnedCategory(t.description, learned) === t.category);
+                      return (
+                        <tr key={t.id} className={`border-t transition-colors ${highlightedTxId === t.id ? 'bg-emerald-50/90' : ''}`}>
+                          <td className="px-4 py-2.5 text-slate-600 whitespace-nowrap">{t.date}</td>
+                          <td className="px-3 py-2.5 font-medium max-w-[280px]">
+                            <div className="flex items-center gap-1.5">
+                              <span className="truncate" title={t.description}>{t.description}</span>
+                              {isLearnedMatch && (
+                                <span
+                                  title="Category matched via learned merchant rule"
+                                  className="shrink-0 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200"
+                                >
+                                  <Sparkles size={9} /> Learned
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className={`px-3 py-2.5 text-right font-semibold whitespace-nowrap ${t.amount<0?'text-red-600':'text-emerald-700'}`}>{fmt(t.amount)}</td>
+                          <td className="px-3 py-2.5 min-w-[160px]">
+                            <select
+                              value={t.category}
+                              onChange={e=> {
+                                const newCat = e.target.value;
+                                const newType = newCat==='Income' ? 'income' as const : newCat==='Transfers' ? t.type : 'expense' as const;
+                                setTransactions(prev=> prev.map(x=> x.id===t.id?{...x, category:newCat, type:newType, learnedRule: true}:x));
+                                const key = t.description.toUpperCase().trim();
+                                const baseKey = key.replace(/#\d+/g,'').replace(/\s+\d+$/g,'').trim().replace(/\s+/g,' ');
+                                const baseKey2 = baseKey.replace(/#.*$/,'').trim();
+                                setLearned(prev=> {
+                                  const next: Record<string, string> = {...prev, [key]: newCat};
+                                  if (baseKey && baseKey!==key) next[baseKey]=newCat;
+                                  if (baseKey2 && baseKey2!==key) next[baseKey2]=newCat;
+                                  return next;
+                                });
+                                setHighlightedTxId(t.id);
+                                setTimeout(() => setHighlightedTxId(null), 2000);
+                                showNotice('success', `Updated "${t.description}" to ${newCat} and saved merchant rule.`);
+                              }}
+                              className="px-2 py-1 rounded-lg border text-[11px] bg-white w-full"
+                            >
+                              <option value="Income">Income</option>
+                              {categories.filter(c => c.name !== 'Income').map(c=> <option key={c.name} value={c.name}>{c.name}</option>)}
+                            </select>
+                          </td>
+                          <td className="px-4 py-2.5 text-right">
+                            <div className="flex gap-2 justify-end">
+                              <button onClick={()=> duplicateTransaction(t)} className="text-[11px] px-2 py-1 rounded bg-white border hover:bg-slate-50">Duplicate</button>
+                              <button onClick={()=> requestDeleteTransaction(t)} className="text-[11px] px-2 py-1 rounded text-red-600 hover:bg-red-50">Delete</button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
                   <tfoot>
                     <tr className="border-t-2 border-slate-900 bg-slate-50 font-bold">
                       <td className="px-4 py-3 text-[12px]">
@@ -832,7 +1361,7 @@ export default function App(){
                         <input defaultValue={cat.name} onBlur={e=> updateCategoryName(cat.name, e.target.value)} onKeyDown={e=>{ if(e.key==='Enter'){ (e.target as HTMLInputElement).blur(); } }} className="w-full font-medium text-[13px] bg-transparent focus:bg-slate-50 rounded px-1"/>
                         <p className="text-[11px] text-slate-500">{count} txns • {fmt(total)}</p>
                       </div>
-                      <button onClick={()=> deleteCategory(cat.name)} className="px-2.5 py-1 rounded-full border text-[11px]">Delete</button>
+                      <button onClick={()=> deleteCategory(cat.name)} className="px-2.5 py-1 rounded-full border text-[11px] hover:bg-red-50 hover:border-red-200 hover:text-red-700">Delete</button>
                     </div>
                   );
                 })}
@@ -849,11 +1378,3 @@ export default function App(){
     </PasswordGate>
   );
 }
-
-
-
-
-
-
-
-
