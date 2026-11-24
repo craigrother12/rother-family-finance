@@ -669,9 +669,7 @@ export default function App(){
         const reader = new FileReader();
         reader.onload = e => {
           const text = e.target?.result as string;
-          const rawLines = text.split(/
-?
-/).filter(l=> l.trim().length>0);
+          const rawLines = text.split(/\r?\n/).filter(l=> l.trim().length>0);
           if (rawLines.length < 2) { resolve([]); return; }
           const headerCols = splitCsvRow(rawLines[0]).map(h=> h.trim().toLowerCase());
           const hasDebitCredit = headerCols.includes('debit') && headerCols.includes('credit');
