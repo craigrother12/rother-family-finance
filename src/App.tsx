@@ -622,27 +622,137 @@ export default function App(){
   }, [filteredTransactions, categories]);
 
   const [overviewCat, setOverviewCat] = React.useState<string>('All');
+  const [overviewDateMode, setOverviewDateMode] = React.useState<'synced' | 'last_month' | 'custom'>('synced');
+  const [overviewStartDate, setOverviewStartDate] = React.useState<string>(() => {
+    const d = new Date();
+    d.setDate(1);
+    return d.toISOString().slice(0, 10);
+  });
+  const [overviewEndDate, setOverviewEndDate] = React.useState<string>(() => new Date().toISOString().slice(0, 10));
 
-  const overviewBaseExpenses = React.useMemo(() => {
-    return filteredTransactions.filter(
-      t => t.amount < 0 && t.category !== 'Transfers' && t.category !== 'Income'
-    );
-  }, [filteredTransactions]);
+  const overviewPeriodInfo = React.useMemo(() => {
+    const now = new Date();
+    const prevMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const prevMonthKey = `${prevMonthDate.getFullYear()}-${String(prevMonthDate.getMonth() + 1).padStart(2, '0')}`;
+    const prevMonthLabel = prevMonthDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+
+    if (overviewDateMode === 'last_month') {
+      return {
+        label: `Last Month (${prevMonthLabel})`,
+        referenceMonthDate: prevMonthDate,
+        matchesDate: (dateStr: string) => dateStr.startsWith(prevMonthKey),
+      };
+    }
+    if (overviewDateMode === 'custom') {
+      const refDate = overviewEndDate ? new Date(`${overviewEndDate}T12:00:00`) : now;
+      return {
+        label: `${overviewStartDate || 'Start'} to ${overviewEndDate || 'End'}`,
+        referenceMonthDate: isNaN(refDate.getTime()) ? now : refDate,
+        matchesDate: (dateStr: string) => {
+          if (overviewStartDate && dateStr < overviewStartDate) return false;
+          if (overviewEndDate && dateStr > overviewEndDate) return false;
+          return true;
+        },
+      };
+    }
+
+    let refDate = now;
+    if (filterYear !== 'All') {
+      const y = parseInt(filterYear, 10);
+      const m = filterMonthOnly !== 'All' ? parseInt(filterMonthOnly, 10) - 1 : now.getMonth();
+      if (!isNaN(y) && !isNaN(m)) refDate = new Date(y, m, 1);
+    }
+
+    return {
+      label: filterMonth ? (filterMonthOnly === 'All' ? `${filterYear} Year` : filterMonth) : 'All Time',
+      referenceMonthDate: refDate,
+      matchesDate: (dateStr: string) => !filterMonth || dateStr.startsWith(filterMonth),
+    };
+  }, [overviewDateMode, overviewStartDate, overviewEndDate, filterMonth, filterYear, filterMonthOnly]);
+
+  const overviewPeriodExpenses = React.useMemo(() => {
+    return transactions.filter(t => {
+      if (!(t.amount < 0 && t.category !== 'Transfers' && t.category !== 'Income')) return false;
+      if (!overviewPeriodInfo.matchesDate(t.date)) return false;
+      if (search && !t.description.toLowerCase().includes(search.toLowerCase()) && !t.category.toLowerCase().includes(search.toLowerCase())) {
+        return false;
+      }
+      return true;
+    });
+  }, [transactions, overviewPeriodInfo, search]);
+
+  const overviewPeriodBreakdown = React.useMemo(() => {
+    const map = new Map<string, number>();
+    overviewPeriodExpenses.forEach(t => {
+      map.set(t.category, (map.get(t.category) || 0) + Math.abs(t.amount));
+    });
+    const total = Array.from(map.values()).reduce((a, b) => a + b, 0);
+    const items = Array.from(map.entries())
+      .map(([name, value]) => {
+        const cat = categories.find(c => c.name === name);
+        return { name, value, color: cat?.color || '#94a3b8' };
+      })
+      .sort((a, b) => b.value - a.value);
+    return { items, total };
+  }, [overviewPeriodExpenses, categories]);
 
   const overviewFilteredExpenses = React.useMemo(() => {
-    if (overviewCat === 'All') return overviewBaseExpenses;
-    return overviewBaseExpenses.filter(t => t.category === overviewCat);
-  }, [overviewBaseExpenses, overviewCat]);
+    if (overviewCat === 'All') return overviewPeriodExpenses;
+    return overviewPeriodExpenses.filter(t => t.category === overviewCat);
+  }, [overviewPeriodExpenses, overviewCat]);
 
   const overviewDisplayedBreakdown = React.useMemo(() => {
-    if (overviewCat === 'All') return categoryBreakdown;
+    if (overviewCat === 'All') return overviewPeriodBreakdown;
     const total = overviewFilteredExpenses.reduce((sum, t) => sum + Math.abs(t.amount), 0);
     const cat = categories.find(c => c.name === overviewCat);
     const items = total > 0
       ? [{ name: overviewCat, value: total, color: cat?.color || '#94a3b8' }]
       : [];
     return { items, total };
-  }, [overviewCat, categoryBreakdown, overviewFilteredExpenses, categories]);
+  }, [overviewCat, overviewPeriodBreakdown, overviewFilteredExpenses, categories]);
+
+  const overviewCategoryComparison = React.useMemo(() => {
+    const ref = overviewPeriodInfo.referenceMonthDate;
+    const priorMonthDate = new Date(ref.getFullYear(), ref.getMonth() - 1, 1);
+    const priorMonthKey = `${priorMonthDate.getFullYear()}-${String(priorMonthDate.getMonth() + 1).padStart(2, '0')}`;
+    const priorMonthLabel = priorMonthDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+
+    const sixMonthKeys = new Set<string>();
+    for (let i = 1; i <= 6; i++) {
+      const mDate = new Date(ref.getFullYear(), ref.getMonth() - i, 1);
+      sixMonthKeys.add(`${mDate.getFullYear()}-${String(mDate.getMonth() + 1).padStart(2, '0')}`);
+    }
+
+    const baseExpenses = transactions.filter(
+      t => t.amount < 0 && t.category !== 'Transfers' && t.category !== 'Income'
+    );
+
+    const currentSpend = overviewDisplayedBreakdown.total;
+    const lastMonthSpend = baseExpenses
+      .filter(t => t.date.startsWith(priorMonthKey) && (overviewCat === 'All' || t.category === overviewCat))
+      .reduce((sum, t) => sum + Math.abs(t.amount), 0);
+
+    const sixMonthTotal = baseExpenses
+      .filter(t => sixMonthKeys.has(t.date.slice(0, 7)) && (overviewCat === 'All' || t.category === overviewCat))
+      .reduce((sum, t) => sum + Math.abs(t.amount), 0);
+    const sixMonthAvg = sixMonthTotal / 6;
+
+    const vsLastMonthDiff = currentSpend - lastMonthSpend;
+    const vsLastMonthPct = lastMonthSpend > 0 ? ((currentSpend - lastMonthSpend) / lastMonthSpend) * 100 : null;
+    const vsSixMonthDiff = currentSpend - sixMonthAvg;
+    const vsSixMonthPct = sixMonthAvg > 0 ? ((currentSpend - sixMonthAvg) / sixMonthAvg) * 100 : null;
+
+    return {
+      currentSpend,
+      lastMonthSpend,
+      priorMonthLabel,
+      sixMonthAvg,
+      vsLastMonthDiff,
+      vsLastMonthPct,
+      vsSixMonthDiff,
+      vsSixMonthPct,
+    };
+  }, [transactions, overviewPeriodInfo, overviewDisplayedBreakdown.total, overviewCat]);
 
   const filteredTotal = React.useMemo(()=> {
     const relevant = filteredTransactions.filter(t=> t.category!=='Transfers');
@@ -1046,13 +1156,42 @@ export default function App(){
                 <div className="flex justify-between items-start gap-3 flex-wrap mb-1">
                   <div>
                     <h3 className="font-semibold text-[13px]">
-                      Spending by Category — {overviewCat === 'All' ? 'All Categories' : overviewCat} ({filterMonth || 'All Time'})
+                      Spending by Category — {overviewCat === 'All' ? 'All Categories' : overviewCat} ({overviewPeriodInfo.label})
                     </h3>
                     <p className="text-[11px] text-slate-500 mt-0.5">
                       Excludes Income & Transfers • {overviewFilteredExpenses.length} expenses • Total {fmt(overviewDisplayedBreakdown.total)}
                     </p>
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
+                    <select
+                      aria-label="Filter spending by date range"
+                      value={overviewDateMode}
+                      onChange={e => setOverviewDateMode(e.target.value as 'synced' | 'last_month' | 'custom')}
+                      className="px-3 py-1.5 rounded-xl border text-xs bg-white font-medium text-slate-800"
+                    >
+                      <option value="synced">Period: {filterMonth ? (filterMonthOnly === 'All' ? `${filterYear} Year` : filterMonth) : 'All Time'}</option>
+                      <option value="last_month">Last Month</option>
+                      <option value="custom">Custom Date Range</option>
+                    </select>
+                    {overviewDateMode === 'custom' && (
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <input
+                          type="date"
+                          aria-label="Start date"
+                          value={overviewStartDate}
+                          onChange={e => setOverviewStartDate(e.target.value)}
+                          className="px-2.5 py-1.5 rounded-xl border text-xs bg-white"
+                        />
+                        <span className="text-[11px] text-slate-400">to</span>
+                        <input
+                          type="date"
+                          aria-label="End date"
+                          value={overviewEndDate}
+                          onChange={e => setOverviewEndDate(e.target.value)}
+                          className="px-2.5 py-1.5 rounded-xl border text-xs bg-white"
+                        />
+                      </div>
+                    )}
                     <select
                       aria-label="Filter spending by category"
                       value={overviewCat}
@@ -1064,17 +1203,68 @@ export default function App(){
                         .filter(c => !['Income', 'Transfers'].includes(c.name))
                         .map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
                     </select>
-                    {overviewCat !== 'All' && (
+                    {(overviewCat !== 'All' || overviewDateMode !== 'synced') && (
                       <button
-                        onClick={() => setOverviewCat('All')}
+                        onClick={() => { setOverviewCat('All'); setOverviewDateMode('synced'); }}
                         className="px-2.5 py-1.5 rounded-xl bg-slate-100 text-slate-700 text-xs hover:bg-slate-200"
                       >
                         Reset
                       </button>
                     )}
-                    <span className="text-[11px] text-slate-500">Synced with Transactions period</span>
                   </div>
                 </div>
+
+                {/* Comparison Strip: Selected/Current vs Last Month vs 6-Month Average */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
+                  <div className="rounded-xl bg-slate-50 border p-3">
+                    <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
+                      {overviewCat === 'All' ? 'Selected Spend' : `${overviewCat} Spend`} ({overviewPeriodInfo.label})
+                    </p>
+                    <p className="text-base font-bold text-slate-900 mt-0.5">{fmt(overviewCategoryComparison.currentSpend)}</p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">{overviewFilteredExpenses.length} matching expenses</p>
+                  </div>
+
+                  <div className="rounded-xl bg-slate-50 border p-3">
+                    <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
+                      Last Month ({overviewCategoryComparison.priorMonthLabel})
+                    </p>
+                    <p className="text-base font-bold text-slate-900 mt-0.5">{fmt(overviewCategoryComparison.lastMonthSpend)}</p>
+                    <p className={`text-[10px] font-medium mt-0.5 ${
+                      overviewCategoryComparison.vsLastMonthDiff > 0
+                        ? 'text-red-600'
+                        : overviewCategoryComparison.vsLastMonthDiff < 0
+                        ? 'text-emerald-700'
+                        : 'text-slate-500'
+                    }`}>
+                      {overviewCategoryComparison.vsLastMonthDiff > 0 ? '▲ +' : overviewCategoryComparison.vsLastMonthDiff < 0 ? '▼ ' : ''}
+                      {fmt(overviewCategoryComparison.vsLastMonthDiff)} vs selected
+                      {overviewCategoryComparison.vsLastMonthPct !== null
+                        ? ` (${overviewCategoryComparison.vsLastMonthPct > 0 ? '+' : ''}${overviewCategoryComparison.vsLastMonthPct.toFixed(0)}%)`
+                        : ''}
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl bg-slate-50 border p-3">
+                    <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
+                      6-Month Avg ({overviewCat === 'All' ? 'All Spending' : overviewCat})
+                    </p>
+                    <p className="text-base font-bold text-slate-900 mt-0.5">{fmt(overviewCategoryComparison.sixMonthAvg)}</p>
+                    <p className={`text-[10px] font-medium mt-0.5 ${
+                      overviewCategoryComparison.vsSixMonthDiff > 0
+                        ? 'text-red-600'
+                        : overviewCategoryComparison.vsSixMonthDiff < 0
+                        ? 'text-emerald-700'
+                        : 'text-slate-500'
+                    }`}>
+                      {overviewCategoryComparison.vsSixMonthDiff > 0 ? '▲ +' : overviewCategoryComparison.vsSixMonthDiff < 0 ? '▼ ' : ''}
+                      {fmt(overviewCategoryComparison.vsSixMonthDiff)} vs 6-mo avg
+                      {overviewCategoryComparison.vsSixMonthPct !== null
+                        ? ` (${overviewCategoryComparison.vsSixMonthPct > 0 ? '+' : ''}${overviewCategoryComparison.vsSixMonthPct.toFixed(0)}%)`
+                        : ''}
+                    </p>
+                  </div>
+                </div>
+
                 <div className="h-[280px] mt-3">
                   {overviewDisplayedBreakdown.items.length > 0 ? (
                     <ResponsiveContainer width="100%" height="100%">
@@ -1091,7 +1281,7 @@ export default function App(){
                     </ResponsiveContainer>
                   ) : (
                     <div className="h-full rounded-xl border border-dashed bg-slate-50 grid place-items-center text-xs text-slate-500 px-4 text-center">
-                      No spending recorded for {overviewCat} in {filterMonth || 'All Time'}.
+                      No spending recorded for {overviewCat} in {overviewPeriodInfo.label}.
                     </div>
                   )}
                 </div>
@@ -1103,7 +1293,7 @@ export default function App(){
                         <span>{name}</span>
                       </div>
                       <span className="font-medium">
-                        {fmt(value)} ({categoryBreakdown.total>0? Math.round(value/categoryBreakdown.total*100):0}% of period spend)
+                        {fmt(value)} ({overviewPeriodBreakdown.total>0? Math.round(value/overviewPeriodBreakdown.total*100):0}% of period spend)
                       </span>
                     </div>
                   ))}
