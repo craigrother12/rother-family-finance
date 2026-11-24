@@ -712,14 +712,22 @@ export default function App(){
   }, [overviewCat, overviewPeriodBreakdown, overviewFilteredExpenses, categories]);
 
   const overviewCategoryComparison = React.useMemo(() => {
+    const now = new Date();
     const ref = overviewPeriodInfo.referenceMonthDate;
-    const priorMonthDate = new Date(ref.getFullYear(), ref.getMonth() - 1, 1);
+    const refYear = ref.getFullYear();
+    const refMonthIdx = ref.getMonth();
+    const daysInMonth = new Date(refYear, refMonthIdx + 1, 0).getDate();
+    const isCurrentCalendarMonth = refYear === now.getFullYear() && refMonthIdx === now.getMonth();
+    const elapsedDays = isCurrentCalendarMonth ? Math.max(1, Math.min(now.getDate(), daysInMonth)) : daysInMonth;
+    const paceMultiplier = daysInMonth / elapsedDays;
+
+    const priorMonthDate = new Date(refYear, refMonthIdx - 1, 1);
     const priorMonthKey = `${priorMonthDate.getFullYear()}-${String(priorMonthDate.getMonth() + 1).padStart(2, '0')}`;
     const priorMonthLabel = priorMonthDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
 
     const sixMonthKeys = new Set<string>();
     for (let i = 1; i <= 6; i++) {
-      const mDate = new Date(ref.getFullYear(), ref.getMonth() - i, 1);
+      const mDate = new Date(refYear, refMonthIdx - i, 1);
       sixMonthKeys.add(`${mDate.getFullYear()}-${String(mDate.getMonth() + 1).padStart(2, '0')}`);
     }
 
@@ -728,6 +736,11 @@ export default function App(){
     );
 
     const currentSpend = overviewDisplayedBreakdown.total;
+    const onPaceSpend = currentSpend * paceMultiplier;
+    const paceNote = isCurrentCalendarMonth
+      ? `Day ${elapsedDays} of ${daysInMonth} (${paceMultiplier.toFixed(2)}x pace)`
+      : `Full ${daysInMonth}-day month`;
+
     const lastMonthSpend = baseExpenses
       .filter(t => t.date.startsWith(priorMonthKey) && (overviewCat === 'All' || t.category === overviewCat))
       .reduce((sum, t) => sum + Math.abs(t.amount), 0);
@@ -737,13 +750,18 @@ export default function App(){
       .reduce((sum, t) => sum + Math.abs(t.amount), 0);
     const sixMonthAvg = sixMonthTotal / 6;
 
-    const vsLastMonthDiff = currentSpend - lastMonthSpend;
-    const vsLastMonthPct = lastMonthSpend > 0 ? ((currentSpend - lastMonthSpend) / lastMonthSpend) * 100 : null;
-    const vsSixMonthDiff = currentSpend - sixMonthAvg;
-    const vsSixMonthPct = sixMonthAvg > 0 ? ((currentSpend - sixMonthAvg) / sixMonthAvg) * 100 : null;
+    const vsLastMonthDiff = onPaceSpend - lastMonthSpend;
+    const vsLastMonthPct = lastMonthSpend > 0 ? ((onPaceSpend - lastMonthSpend) / lastMonthSpend) * 100 : null;
+    const vsSixMonthDiff = onPaceSpend - sixMonthAvg;
+    const vsSixMonthPct = sixMonthAvg > 0 ? ((onPaceSpend - sixMonthAvg) / sixMonthAvg) * 100 : null;
 
     return {
       currentSpend,
+      onPaceSpend,
+      paceNote,
+      elapsedDays,
+      daysInMonth,
+      isCurrentCalendarMonth,
       lastMonthSpend,
       priorMonthLabel,
       sixMonthAvg,
@@ -1214,14 +1232,25 @@ export default function App(){
                   </div>
                 </div>
 
-                {/* Comparison Strip: Selected/Current vs Last Month vs 6-Month Average */}
+                {/* Comparison Strip: Current + On-Pace vs Last Month vs 6-Month Average */}
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
                   <div className="rounded-xl bg-slate-50 border p-3">
                     <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
-                      {overviewCat === 'All' ? 'Selected Spend' : `${overviewCat} Spend`} ({overviewPeriodInfo.label})
+                      {overviewCat === 'All' ? 'Current & On-Pace Spend' : `${overviewCat} Current & Pace`}
                     </p>
-                    <p className="text-base font-bold text-slate-900 mt-0.5">{fmt(overviewCategoryComparison.currentSpend)}</p>
-                    <p className="text-[10px] text-slate-500 mt-0.5">{overviewFilteredExpenses.length} matching expenses</p>
+                    <div className="flex items-baseline justify-between gap-2 mt-0.5 flex-wrap">
+                      <div>
+                        <span className="text-[10px] text-slate-500 mr-1">Actual:</span>
+                        <span className="text-sm font-bold text-slate-900">{fmt(overviewCategoryComparison.currentSpend)}</span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-indigo-700 font-medium mr-1">On Pace:</span>
+                        <span className="text-base font-bold text-indigo-700">{fmt(overviewCategoryComparison.onPaceSpend)}</span>
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-slate-500 mt-0.5">
+                      {overviewCategoryComparison.paceNote} • {overviewFilteredExpenses.length} expenses
+                    </p>
                   </div>
 
                   <div className="rounded-xl bg-slate-50 border p-3">
@@ -1237,7 +1266,7 @@ export default function App(){
                         : 'text-slate-500'
                     }`}>
                       {overviewCategoryComparison.vsLastMonthDiff > 0 ? '▲ +' : overviewCategoryComparison.vsLastMonthDiff < 0 ? '▼ ' : ''}
-                      {fmt(overviewCategoryComparison.vsLastMonthDiff)} vs selected
+                      {fmt(overviewCategoryComparison.vsLastMonthDiff)} pace vs last mo
                       {overviewCategoryComparison.vsLastMonthPct !== null
                         ? ` (${overviewCategoryComparison.vsLastMonthPct > 0 ? '+' : ''}${overviewCategoryComparison.vsLastMonthPct.toFixed(0)}%)`
                         : ''}
@@ -1257,7 +1286,7 @@ export default function App(){
                         : 'text-slate-500'
                     }`}>
                       {overviewCategoryComparison.vsSixMonthDiff > 0 ? '▲ +' : overviewCategoryComparison.vsSixMonthDiff < 0 ? '▼ ' : ''}
-                      {fmt(overviewCategoryComparison.vsSixMonthDiff)} vs 6-mo avg
+                      {fmt(overviewCategoryComparison.vsSixMonthDiff)} pace vs 6-mo avg
                       {overviewCategoryComparison.vsSixMonthPct !== null
                         ? ` (${overviewCategoryComparison.vsSixMonthPct > 0 ? '+' : ''}${overviewCategoryComparison.vsSixMonthPct.toFixed(0)}%)`
                         : ''}
