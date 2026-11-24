@@ -1132,6 +1132,7 @@ export default function App(){
               <input type="file" accept=".json" className="hidden" onChange={e=>{ const f=e.target.files?.[0]; if(f) importBackup(f); e.target.value=''; }}/>
             </label>
             <button onClick={async ()=>{ try{ sessionStorage.removeItem('fam-auth'); await supabase.auth.signOut(); }catch{} location.reload(); }} className="px-3 py-2 rounded-xl bg-white border text-xs hover:bg-slate-50">Lock</button>
+            <button onClick={async ()=>{ try{ sessionStorage.removeItem('fam-auth'); localStorage.removeItem('fam-auth'); await supabase.auth.signOut(); }catch{} location.reload(); }} className="px-3 py-2 rounded-xl bg-slate-100 border text-xs font-medium text-slate-700 hover:bg-slate-200">Logout</button>
             <button onClick={openResetConfirm} className="px-3 py-2 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-semibold hover:bg-red-100">Reset</button>
           </div>
         </div>
