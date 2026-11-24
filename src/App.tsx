@@ -237,28 +237,66 @@ function isBillDueInMonth(b: Bill, targetMonth: number): { due: boolean; reason:
 }
 
 
-// --- PASSWORD GATE ---
-const APP_PASSWORD = import.meta.env.VITE_APP_PASSWORD || 'Rother2026!';
+// --- SUPABASE AUTH GATE ---
 function PasswordGate({ children }: { children: React.ReactNode }) {
-  const [isAuthed, setIsAuthed] = React.useState(()=> {
-    try { return sessionStorage.getItem('fam-auth') === 'true'; } catch { return false; }
-  });
+  const [session, setSession] = React.useState<any>(null);
+  const [checkingSession, setCheckingSession] = React.useState(true);
+  const [email, setEmail] = React.useState('');
   const [pw, setPw] = React.useState('');
-  const [error, setError] = React.useState(false);
+  const [errorMsg, setErrorMsg] = React.useState('');
+  const [submitting, setSubmitting] = React.useState(false);
   const [show, setShow] = React.useState(false);
 
-  const handleLogin = (e?: React.FormEvent) => {
+  React.useEffect(() => {
+    let active = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (!active) return;
+      setSession(data.session ?? null);
+      setCheckingSession(false);
+    }).catch(() => {
+      if (!active) return;
+      setCheckingSession(false);
+    });
+
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      if (!active) return;
+      setSession(nextSession ?? null);
+      setCheckingSession(false);
+    });
+
+    return () => {
+      active = false;
+      authListener.subscription.unsubscribe();
+    };
+  }, []);
+
+  const handleLogin = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (pw === APP_PASSWORD) {
-      try { sessionStorage.setItem('fam-auth', 'true'); } catch {}
-      setIsAuthed(true);
-      setError(false);
-    } else {
-      setError(true);
+    if (!email.trim() || !pw) {
+      setErrorMsg('Please enter both email and password.');
+      return;
+    }
+    setSubmitting(true);
+    setErrorMsg('');
+    const { error } = await supabase.auth.signInWithPassword({
+      email: email.trim(),
+      password: pw,
+    });
+    setSubmitting(false);
+    if (error) {
+      setErrorMsg(error.message || 'Sign-in failed. Check your credentials.');
     }
   };
 
-  if (isAuthed) {
+  if (checkingSession) {
+    return (
+      <div className="min-h-screen bg-[#f8fafc] grid place-items-center px-4">
+        <div className="rounded-2xl bg-white border px-6 py-4 text-xs text-slate-500">Checking session...</div>
+      </div>
+    );
+  }
+
+  if (session) {
     return <>{children}</>;
   }
 
@@ -267,31 +305,44 @@ function PasswordGate({ children }: { children: React.ReactNode }) {
       <div className="w-full max-w-[360px] rounded-[24px] bg-white border shadow-sm p-8">
         <div className="w-12 h-12 rounded-2xl bg-slate-900 text-white grid place-items-center font-black text-xl mx-auto">R</div>
         <h1 className="text-center font-bold text-[18px] mt-4">Rother Family Finance</h1>
-        <p className="text-center text-[12px] text-slate-500 mt-1">Enter password to access</p>
+        <p className="text-center text-[12px] text-slate-500 mt-1">Sign in with your Supabase account</p>
         
         <form onSubmit={handleLogin} className="mt-6 space-y-3">
+          <div>
+            <input
+              type="email"
+              value={email}
+              onChange={e => { setEmail(e.target.value); setErrorMsg(''); }}
+              placeholder="Email address"
+              autoFocus
+              autoComplete="email"
+              className={`w-full px-4 py-3 rounded-xl border text-[14px] outline-none focus:ring-2 focus:ring-slate-900 ${errorMsg ? 'border-red-300 bg-red-50' : 'border-slate-200 bg-slate-50'}`}
+            />
+          </div>
           <div className="relative">
             <input
               type={show ? 'text' : 'password'}
               value={pw}
-              onChange={e=>{setPw(e.target.value); setError(false);}}
+              onChange={e => { setPw(e.target.value); setErrorMsg(''); }}
               placeholder="Password"
-              autoFocus
-              className={`w-full px-4 py-3.5 rounded-xl border text-[15px] outline-none focus:ring-2 focus:ring-slate-900 ${error ? 'border-red-300 bg-red-50' : 'border-slate-200 bg-slate-50'}`}
+              autoComplete="current-password"
+              className={`w-full px-4 py-3 rounded-xl border text-[14px] outline-none focus:ring-2 focus:ring-slate-900 ${errorMsg ? 'border-red-300 bg-red-50' : 'border-slate-200 bg-slate-50'}`}
             />
-            <button type="button" onClick={()=>setShow(!show)} className="absolute right-3 top-3.5 text-[12px] text-slate-500 px-2 py-1 rounded-lg hover:bg-slate-100">
+            <button type="button" onClick={() => setShow(!show)} className="absolute right-3 top-3 text-[12px] text-slate-500 px-2 py-1 rounded-lg hover:bg-slate-100">
               {show ? 'Hide' : 'Show'}
             </button>
           </div>
-          {error && <p className="text-[12px] text-red-600">Incorrect password. Try again.</p>}
-          <button type="submit" className="w-full py-3.5 rounded-xl bg-slate-900 text-white font-semibold text-[14px] hover:bg-black">Unlock</button>
-          <p className="text-[10px] text-slate-400 text-center mt-2">Protected • Data stays on your device • Change password in Vercel env VITE_APP_PASSWORD</p>
+          {errorMsg && <p className="text-[12px] text-red-600">{errorMsg}</p>}
+          <button type="submit" disabled={submitting} className="w-full py-3.5 rounded-xl bg-slate-900 text-white font-semibold text-[14px] hover:bg-black disabled:opacity-60">
+            {submitting ? 'Signing in...' : 'Sign In'}
+          </button>
+          <p className="text-[10px] text-slate-400 text-center mt-2">Authenticated via Supabase Auth • Enforced by Row Level Security</p>
         </form>
       </div>
     </div>
   );
 }
-// --- END PASSWORD GATE ---
+// --- END SUPABASE AUTH GATE ---
 
 
 function EditableAmount({ value, onSave, isDebt }: { value: number; onSave: (v:number)=>void; isDebt?: boolean }) {
@@ -400,7 +451,29 @@ export default function App(){
 
   React.useEffect(()=>{ localStorage.setItem('fam-nw-history', JSON.stringify(netWorthHistory)); }, [netWorthHistory]);
   React.useEffect(()=>{ if (netWorthHistory.length===0 && (liquid.length>0 || illiquid.length>0)) { const totalLiquidAssets = liquid.filter(a=>!a.isDebt).reduce((s,a)=>s+a.amount,0); const totalLiquidDebt = liquid.filter(a=>a.isDebt).reduce((s,a)=>s+a.amount,0); const netLiquid = totalLiquidAssets - totalLiquidDebt; const totalIlliquidAssets = illiquid.filter(a=>!a.isDebt).reduce((s,a)=>s+a.amount,0); const totalIlliquidDebt = illiquid.filter(a=>a.isDebt).reduce((s,a)=>s+a.amount,0); const netIlliquid = totalIlliquidAssets - totalIlliquidDebt; const nw = netLiquid + netIlliquid; if (nw>0) { setNetWorthHistory([{date: new Date().toISOString().slice(0,10), timestamp: Date.now(), netWorth: nw, liquid: netLiquid, illiquid: netIlliquid}]); } } }, []);
+  const [authReady, setAuthReady] = React.useState(false);
+
+  React.useEffect(() => {
+    let active = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (!active) return;
+      setAuthReady(Boolean(data.session));
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      if (!active) return;
+      setAuthReady(Boolean(nextSession));
+    });
+    return () => {
+      active = false;
+      sub.subscription.unsubscribe();
+    };
+  }, []);
+
   React.useEffect(()=> { 
+    if (!authReady) {
+      setCloudStatus('offline');
+      return;
+    }
     const load = async ()=> { 
       try { 
         setCloudStatus('syncing'); 
@@ -446,8 +519,9 @@ export default function App(){
       } catch(e){ console.error('realtime error', e); } 
     }).subscribe(); 
     return ()=> { supabase.removeChannel(channel); }; 
-  }, []);
+  }, [authReady]);
   React.useEffect(()=> { 
+    if (!authReady) return;
     if (isInitialCloudLoad.current) return; 
     if (isApplyingRemote.current) return; 
     setCloudStatus('syncing'); 
@@ -1057,7 +1131,7 @@ export default function App(){
               Import
               <input type="file" accept=".json" className="hidden" onChange={e=>{ const f=e.target.files?.[0]; if(f) importBackup(f); e.target.value=''; }}/>
             </label>
-            <button onClick={()=>{ try{ sessionStorage.removeItem('fam-auth'); }catch{} location.reload(); }} className="px-3 py-2 rounded-xl bg-white border text-xs hover:bg-slate-50">Lock</button>
+            <button onClick={async ()=>{ try{ sessionStorage.removeItem('fam-auth'); await supabase.auth.signOut(); }catch{} location.reload(); }} className="px-3 py-2 rounded-xl bg-white border text-xs hover:bg-slate-50">Lock</button>
             <button onClick={openResetConfirm} className="px-3 py-2 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-semibold hover:bg-red-100">Reset</button>
           </div>
         </div>
